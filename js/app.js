@@ -149,8 +149,9 @@ function firstNameOf(name){
   if(!n)return '';
   return n.split(/\s+/)[0].replace(/[^A-Za-z]/g,'')||'';
 }
-// ✏️ Edit / Card Password — auto-generated greeting for the Requester EDIT password & Card Password.
-// Rules: max 8 letters, unique per person, deterministic (same inputs → same key), always uppercase.
+// ✏️ Edit / Card Password — auto-generated KEY for the Requester EDIT password & Card Password.
+// (Not a card greeting message — this is the login/edit credential.)
+// Rules: max 8 characters, unique per person, deterministic (same inputs → same key), always uppercase.
 const PW_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no look-alike chars (no I/O/0/1)
 function editPwHash(s){
   let h=2166136261>>>0;
@@ -2183,7 +2184,7 @@ function renderPeopleRepeater(){
         <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
           <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
           <input type="text" class="panel-input" data-pp="editpw_readonly" data-i="${i}" readonly value="${editPw||''}" style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
-          <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Auto greeting: unique, max 8 letters (e.g. K7QW2M4X). Same inputs always give the same key.</div>
+          <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Auto-generated Edit Key: unique, max 8 characters (e.g. K7QW2M4X). Same inputs always give the same key.</div>
           <label class="panel-label" style="color:#0d5c4a;margin-top:.5rem;display:block;">🔒 Private Media OTP (auto — required to open the private slideshow)</label>
           <input type="text" class="panel-input" data-pp="otp_readonly" data-i="${i}" readonly value="${getPrivateOtpForPerson(p)||''}" style="background:#e9f7f1;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
           <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">6-digit code generated from the Edit Key. Share it with the couple so they can unlock “Open Our Private Memories”.</div>
