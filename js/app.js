@@ -416,6 +416,12 @@ async function tryPersonPw(){
   $('homeScreen').classList.add('hidden');
   if(locked||showLock){
     renderLockFull();show($('lockScreen'));
+    // FIX 7: when lock screen is force-shown AFTER unlock (showLockScreen=true),
+    // hide the countdown row + Open Early button entirely — nothing left to count down.
+    const cdRow=$('cdDays')&&$('cdDays').closest('.countdown');
+    if(cdRow)cdRow.style.display=locked?'':'none';
+    $('countdownLabelEl').style.display=locked?'':'none';
+    const oeBtn=$('openEarlyBtn');if(oeBtn)oeBtn.style.display=locked?'':'none';
     if(locked)startCountdownFull(unlockDate);else txt($('countdownLabelEl'),'');
     return;
   }
@@ -435,6 +441,12 @@ function renderLockFull(){
 let CD_T=null;
 function startCountdownFull(unlockDate){
   clearInterval(CD_T);
+  // FIX 7: re-show countdown row + Open Early when a real countdown starts
+  // (they may have been hidden by a previous showLockScreen-only display).
+  const cdRow=$('cdDays')&&$('cdDays').closest('.countdown');
+  if(cdRow)cdRow.style.display='';
+  $('countdownLabelEl').style.display='';
+  const oeBtn=$('openEarlyBtn');if(oeBtn)oeBtn.style.display='';
   function tick(){
     const diff=unlockDate-new Date();
     if(diff<=0){clearInterval(CD_T);['cdDays','cdHours','cdMins','cdSecs'].forEach(id=>$(id).textContent='00');return}
@@ -446,12 +458,15 @@ function startCountdownFull(unlockDate){
   }
   tick();CD_T=setInterval(tick,1000);
 }
+// FIX 7: explicit timer cleanup — called on lock-screen dismiss & card close (spec §5.6)
+function stopCountdownFull(){ if(CD_T){clearInterval(CD_T);CD_T=null;} }
+window.stopCountdownFull=stopCountdownFull;
 $('openEarlyBtn').onclick=()=>{
   const unlockIso=(S.CURR.shared||{}).unlockDateISO||'';
   const unlockDate=unlockIso?new Date(unlockIso):null;
   const locked=unlockDate&&!isNaN(unlockDate)&&new Date()<unlockDate;
   if(locked){ const tpl=getText('pwLockedMsg','🔒 This surprise unlocks on {date}. Please come back then.'); alert(tpl.replace('{date}',unlockDate.toLocaleString())); return; }
-  clearInterval(CD_T);hide($('lockScreen'));openOpeningFull();
+  stopCountdownFull();hide($('lockScreen'));openOpeningFull();
 };
 
 function openOpeningFull(){
@@ -568,20 +583,47 @@ function startTypewriter(){
 
 function updateCounters(){
   const s=S.CURR.shared||{};
-  const fmt=iso=>{
+  const last=window.__counterLast__||(window.__counterLast__={});
+  const fmt=(iso,key)=>{
     if(!iso)return'—';
     const d=new Date(iso);if(isNaN(d.getTime()))return'—';
     const diff=Date.now()-d.getTime();
     if(diff<0)return'Just started 💕';
     const sec=Math.floor(diff/1000);
+    // PERF (spec §5.7): unchanged second → skip DOM write entirely
+    if(last[key]===sec)return null;
+    last[key]=sec;
     const days=Math.floor(sec/86400),hrs=Math.floor((sec%86400)/3600),mins=Math.floor((sec%3600)/60),ss=sec%60;
     return `<strong>${days}</strong> d <strong>${hrs}</strong> h <strong>${mins}</strong> m <strong>${ss}</strong> s`;
   };
-  $('counterTalkMain').innerHTML=fmt(s.ct1_datetime);
-  $('counterYesMain').innerHTML=fmt(s.ct2_datetime);
-  $('counterEngagedMain').innerHTML=fmt(s.ct3_datetime);
+  const set=(el,html)=>{ if(el&&html!=null)el.innerHTML=html };
+  set($('counterTalkMain'),fmt(s.ct1_datetime,'ct1'));
+  set($('counterYesMain'),fmt(s.ct2_datetime,'ct2'));
+  set($('counterEngagedMain'),fmt(s.ct3_datetime,'ct3'));
 }
-setInterval(()=>{if($('viewerScreen').classList.contains('active'))updateCounters()},1000);
+// PERF (spec §5.7): interval runs ONLY while #viewerScreen is active AND tab visible.
+// Started/stopped via visibilitychange + MutationObserver on the viewer's class list.
+(function(){
+  let running=false;
+  function shouldRun(){
+    const v=$('viewerScreen');
+    return !!(v&&v.classList.contains('active'))&&!document.hidden;
+  }
+  function stop(){ if(running){clearInterval(window.__counterInterval);window.__counterInterval=null;running=false;} }
+  function sync(){
+    if(shouldRun()){
+      if(!running){ window.updateCounters?window.updateCounters():updateCounters(); window.__counterInterval=setInterval(tick,1000); running=true; }
+    } else stop();
+  }
+  function tick(){ if(document.hidden){stop();return;} updateCounters(); }
+  document.addEventListener('visibilitychange',sync);
+  function init(){
+    const v=$('viewerScreen');
+    if(v&&window.MutationObserver){ new MutationObserver(sync).observe(v,{attributes:true,attributeFilter:['class']}); }
+    sync();
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
 
 function renderGifts(){
   const w=$('giftRow'),sec=$('giftSection');
@@ -866,31 +908,33 @@ $('uploadSubmit').onclick=async()=>{
 let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
 function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
 
+// FIX 6: per-song 'where' is now the AUTHORITATIVE placement selector.
+// The song's own dropdown decides WHERE it plays, regardless of the global mode:
+//   song 'card'      -> card only        (even when mode = 'both' or 'slideshow')
+//   song 'slideshow' -> slideshow only   (even when mode = 'both' or 'card')
+//   song 'both'      -> follows the global mode (mode gates these songs only).
+// Global music_mode still acts as a master switch for 'both'-songs:
+//   mode 'card'      -> 'both'-songs play on card only, silent in slideshow
+//   mode 'slideshow' -> 'both'-songs play in slideshow only, silent on card
+//   mode 'both'      -> 'both'-songs play everywhere.
+function songAllowedIn(s,i,ctx){
+  const mode=s.music_mode||'both';
+  const w=s['song'+i+'_where']||'both';
+  if(w===ctx)return true;          // exact match: card->card, slideshow->slideshow
+  if(w==='both'){                   // 'both' songs obey the global mode
+    return mode==='both'||mode===ctx;
+  }
+  return false;                     // mismatched specific choice never leaks
+}
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
-  const s=S.CURR.shared||{};const mode=s.music_mode||'both';
-  // music_mode is the GLOBAL destination gate: 'card' => slideshow gets nothing,
-  // 'slideshow' => card gets nothing, 'both' => both contexts allowed.
-  if(mode==='card'&&ctx==='slideshow')return[];
-  if(mode==='slideshow'&&ctx==='card')return[];
+  const s=S.CURR.shared||{};
   const base=[];
   for(let i=1;i<=5;i++){
     const on=String(s['song'+i+'_on'])==='true';
     const url=(s['song'+i+'_url']||'').trim();
-    const w=s['song'+i+'_where']||'both';
     if(!on||!url)continue;
-    // Per-song 'where' filter, corrected so mode+where combine properly:
-    // - song 'card': plays in card when mode is 'both' or 'card'; NEVER in slideshow.
-    // - song 'slideshow': plays in slideshow when mode is 'both' or 'slideshow'; NEVER in card.
-    // - song 'both': follows the global mode (allowed in whichever context mode permits).
-    if(ctx==='card'){
-      if(w==='slideshow')continue;
-      if(mode==='slideshow')continue; // already handled above, kept for clarity
-    }else{ // ctx==='slideshow'
-      if(w==='card')continue;
-      if(mode==='card')continue; // already handled above, kept for clarity
-    }
-    base.push(url);
+    if(songAllowedIn(s,i,ctx))base.push(url);
   }
   if(String(s.shuffleMusicOn)!=='true')return base;
   const orderStr=(s.musicOrder||'').trim();
@@ -1003,6 +1047,9 @@ window.__loadPersonIntoState__=loadPersonIntoState;
 
 $('viewerBackBtn').onclick=()=>{
   SS_clearSession();
+  // FIX 7: timer cleanup on close (spec §5.6) — stop countdown + hide lock screen
+  try{ if(window.stopCountdownFull)window.stopCountdownFull(); }catch(e){}
+  try{ hide($('lockScreen')); }catch(e){}
   hide($('viewerScreen'));S.PREVIEW_MODE=false;S.CARD_STARTED=false;S.REQUESTER_MODE=false;
   clearInterval(STORY_T);STORY_T=null;
   if(STORY_MINI){STORY_MINI.stop();STORY_MINI=null;}
@@ -1121,25 +1168,16 @@ function SS_duckedMusicVol(){ return Math.max(0.05,SS_normalMusicVol()*0.35); }
 function SS_isMusicDuringVideo(){ return String((S.CURR.shared||{}).musicDuringVideo)==='true'; }
 function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'):SS_normalMusicVol(); }
 
-// FIXED: SS_ensureMusicPlaying now strictly obeys music_mode + per-song 'where'.
-// - mode='card'      => slideshow must NOT play any music (pause card BGM too).
-// - mode='slideshow' => slideshow plays ONLY songs whose where is 'slideshow'/'both'.
-// - mode='both'      => slideshow plays the slideshow-context playlist; if it's empty,
-//                       fall back to card-context songs (so "Both" always has sound when enabled).
+// FIXED (v2): SS_ensureMusicPlaying obeys the per-song 'where' selection as the
+// authoritative placement rule (see songAllowedIn / buildPlaylistFor):
+// - Songs chosen 'slideshow' or 'both' (when mode allows) play here.
+// - Songs chosen 'card' NEVER leak into the slideshow — even in mode 'both'.
+// - If nothing is allowed in this context, audio pauses (no wrong-place playback).
 function SS_ensureMusicPlaying(){
   const a=$('audioPlayer');
   if(!a)return;
-  const mode=(S.CURR.shared||{}).music_mode||'both';
-  // Global gate: Card-only mode means NO music inside the slideshow at all.
-  if(mode==='card'){
-    if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
-    return;
-  }
   const ssList=buildPlaylistFor('slideshow');   // already filtered by mode+where
-  let wantList=ssList;
-  if(mode==='both' && (!wantList || !wantList.length)){
-    wantList=buildPlaylistFor('card');          // fallback so Both still plays something
-  }
+  const wantList=ssList;
   if(!wantList || !wantList.length){
     if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
@@ -1514,30 +1552,27 @@ function SS_updateSlide(){
     const pb=$('slideshowProgress');
     if(pb){ pb.style.transition='none'; pb.style.width='0%'; }
   }else{
-    // FIXED: obey music_mode + per-song 'where' when resuming music on a non-video slide.
+    // FIXED (v2): obey the per-song 'where' selection when resuming music on a non-video slide.
     const a=$('audioPlayer');
-    const mode=(S.CURR.shared||{}).music_mode||'both';
-    if(a && mode==='card'){
-      // Card-only mode: nothing should play inside the slideshow.
+    const ssList=buildPlaylistFor('slideshow');
+    if(!ssList.length){
+      // Nothing is allowed to play in this context -> stay silent.
       if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
-    } else if(a && mode!=='card'){
-      if(a.paused || !a.src){
-        const ssList=buildPlaylistFor('slideshow');
-        // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
-        const curSrc=a.currentSrc||a.src||'';
-        if(CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)){
-          a.volume=getVol('slideshow');
-          a.play().catch(()=>{});
-          MUSIC_ON=true;
-          $('musicToggle').textContent='🔊';
-          $('musicToggle').classList.add('visible');
-        } else {
-          // Wrong context / card-only songs / empty -> rebuild correct slideshow playlist.
-          SS_ensureMusicPlaying();
-        }
-      } else {
+    } else if(a.paused || !a.src){
+      // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
+      const curSrc=a.currentSrc||a.src||'';
+      if(CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)){
         a.volume=getVol('slideshow');
+        a.play().catch(()=>{});
+        MUSIC_ON=true;
+        $('musicToggle').textContent='🔊';
+        $('musicToggle').classList.add('visible');
+      } else {
+        // Wrong context / card-only song loaded / empty -> rebuild correct slideshow playlist.
+        SS_ensureMusicPlaying();
       }
+    } else {
+      a.volume=getVol('slideshow');
     }
     if(SS_musicDucked!==false){
       SS_fadeMusic(SS_musicTargetVol(),300);
@@ -2464,7 +2499,13 @@ async function saveAdminAll(){
   if(S.CURRENT_PERSON&&S.CURRENT_PERSON.id){
     const pid=S.CURRENT_PERSON.id;
     const settings={};
-    Object.keys(S.CURR.shared).forEach(k=>settings['shared__'+k]=S.CURR.shared[k]);
+    Object.keys(S.CURR.shared).forEach(k=>{
+      // FIX 8 (spec §3.1/§4.4): persist as strings — booleans/dates flattened to text values.
+      const v=S.CURR.shared[k];
+      if(v===null||v===undefined){ settings['shared__'+k]=''; }
+      else if(typeof v==='boolean'){ settings['shared__'+k]=v?'true':'false'; }
+      else { settings['shared__'+k]=String(v); }
+    });
     ['en','gu','hi'].forEach(lang=>{ const tl=S.CURRENT_TEXTS_BY_LANG[lang]||{}; TEXT_FIELDS.forEach(f=>{settings['texts__'+lang+'_'+f]=tl[f]!==undefined?tl[f]:''}); });
     tasks.push(sb.upSet(settings,pid));
     const wi=async(table,rows)=>{ await sb.wipe(table,pid); const clean=rows.filter(r=>r); if(clean.length)await sb.insBatch(table,clean); };
