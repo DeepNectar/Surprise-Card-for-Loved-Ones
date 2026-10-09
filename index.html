@@ -189,7 +189,7 @@
 <div class="panel-sub">Fill the basics. You can add theme, texts, gifts, etc. later by expanding the person's row.</div>
 <div class="panel-field"><label class="panel-label">Display Name <span style="color:#c41e3a;">*required</span></label><input type="text" class="panel-input" id="ap_name" placeholder="e.g. Vrunda"></div>
 <div class="panel-field"><label class="panel-label">Login ID / Slug <span style="color:#c41e3a;">*required</span></label><input type="text" class="panel-input" id="ap_slug" placeholder="e.g. vrunda (lowercase, no spaces)"></div>
-<div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ap_password" placeholder="Click 🎲 below to generate"></div>
+<div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ap_password" maxlength="8" placeholder="Leave blank to auto-generate — unique, max 8 characters"></div>
 <div class="panel-field"><label class="panel-label">Birthday</label><input type="date" class="panel-input" id="ap_birthday"></div>
 <div class="panel-field"><label class="panel-label">Requester name (shown on reviews)</label><input type="text" class="panel-input" id="ap_requester" placeholder="e.g. Deep Patel"></div>
 <div class="panel-field"><label class="panel-label">Requester WhatsApp (used for Edit Key)</label><input type="tel" class="panel-input" id="ap_requester_wa" placeholder="e.g. +971 55 348 8512"></div>
@@ -212,7 +212,7 @@
   <div style="font-size:.7rem;color:#8b0028;font-style:italic;margin-top:.35rem;">Reviews survive wipe.</div>
 </div>
 <div class="panel-field" style="display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center;">
-  <button type="button" class="panel-btn save" id="ap_generatePw" style="min-width:0;background:#2a5fd1;flex:0 0 auto;">🎲 Generate Viewer Password</button>
+  <button type="button" class="panel-btn save" id="ap_generatePw" style="min-width:0;background:#2a5fd1;flex:0 0 auto;">🎲 Generate View Key (8-char)</button>
 </div>
 <div class="panel-actions" style="margin-top:.6rem;">
   <button type="button" class="panel-btn save" id="ap_saveClose">✓ Save &amp; Close</button>
@@ -279,7 +279,7 @@
   </div>
   <div class="panel-section">
     <div class="panel-section-title">🔑 Passwords</div>
-    <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ge_password" placeholder="Leave blank to auto-generate"></div>
+    <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ge_password" maxlength="8" placeholder="Leave blank to auto-generate — unique, max 8 characters"></div>
     <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
       <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
       <input type="text" class="panel-input" id="ge_editpw_preview" readonly style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">

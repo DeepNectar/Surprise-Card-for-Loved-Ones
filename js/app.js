@@ -200,6 +200,39 @@ function ensureUniqueEditPw(base,candidates,selfIdx){
   }
   return norm;
 }
+// 🔒 View Key (viewer/Card password) — SAME RULES as the ✏️ Edit Key:
+// auto-generated, unique per person, max 8 characters, deterministic (same inputs → same key), always uppercase.
+function normalizeViewPw(v){
+  // legacy long-format keys (Name-DDMM-Word) are upgraded to the new short 8-letter format
+  if(/^[A-Za-z]+-\d{4}-[A-Za-z]+$/.test(String(v||'').trim()))return '';
+  return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
+}
+function makeViewerPassword(displayName,birthday,slug,stored){
+  const storedNorm=normalizeViewPw(stored);
+  if(storedNorm)return storedNorm; // keep the existing unique key stable across edits
+  const nm=String(displayName||'Friend').trim();
+  let dd='0000';
+  if(birthday){const d=new Date(birthday);if(!isNaN(d.getTime()))dd=String(d.getDate()).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')+String(d.getFullYear()).slice(-2)}
+  const sl=String(slug||'').toLowerCase().replace(/[^a-z0-9\-_]/g,'');
+  return editPwFromSeed('VIEW|'+nm.toUpperCase()+'|'+dd+'|'+sl); // max 8 letters, unique per person
+}
+// Enforce uniqueness of an 8-letter View Key against all other people (deterministic collision suffix).
+function ensureUniqueViewPw(base,candidates,selfIdx){
+  const norm=String(base||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
+  if(!norm)return '';
+  let taken={};
+  (candidates||[]).forEach((p,i)=>{
+    if(selfIdx!=null&&i===selfIdx)return;
+    const k=normalizeViewPw(p.password);
+    if(k)taken[k]=true;
+  });
+  if(!taken[norm])return norm;
+  for(let d=1;d<=999;d++){
+    const v=norm.slice(0,7)+String(d%10);
+    if(!taken[v])return v;
+  }
+  return norm;
+}
 // Private-media OTP: deterministic 6-digit code derived from the Requester's Edit Key.
 // Generated ONLY in the Requester Portal (when requester name + WhatsApp + slug are filled) and shared with the couple.
 function makePrivateOtp(editPw){
@@ -438,8 +471,11 @@ async function tryPersonPw(){
   if(pw===adminPw||pw===FALLBACK_ADMIN_PW){hide($('personLoginModal'));await window.startAdmin();return}
   const editPw=getEditPasswordForPerson(p);
   const isRequester = editPw && pw===editPw;
-  const expected=p.password||'';
-  const isViewer = expected && pw===expected;
+  // View Keys are stored as short unique 8-char keys (same rules as Edit Keys).
+  // Legacy long-format keys still work for existing people until they are re-saved.
+  const expected=normalizeViewPw(p.password)||String(p.password||'');
+  const entered=String(pw||'');
+  const isViewer = expected ? (entered===expected || entered.toUpperCase()===expected) : false;
   if(!isRequester && !isViewer){
     $('personPwError').textContent=getText('pwError','❌ Incorrect password.');
     $('personPwError').classList.add('show');return;
@@ -2178,7 +2214,7 @@ function renderPeopleRepeater(){
         <div class="panel-field" style="margin-top:.7rem;"><label class="panel-label">Display Name</label><input type="text" class="panel-input" data-pp="display_name" data-i="${i}" value="${(p.display_name||'').replace(/"/g,'&quot;')}"></div>
         <div class="panel-field"><label class="panel-label">Login ID / Slug</label><input type="text" class="panel-input" data-pp="slug" data-i="${i}" value="${(p.slug||'').replace(/"/g,'&quot;')}"></div>
         <div class="panel-field"><label class="panel-label">Birthday</label><input type="date" class="panel-input" data-pp="birthday" data-i="${i}" value="${(p.birthday||'').slice(0,10)}"></div>
-        <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" data-pp="password" data-i="${i}" value="${(p.password||'').replace(/"/g,'&quot;')}"></div>
+        <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" data-pp="password" data-i="${i}" maxlength="8" value="${(p.password||'').replace(/"/g,'&quot;')}" placeholder="Unique, max 8 characters"></div>
         <div class="panel-field"><label class="panel-label">Requester name (shown on reviews)</label><input type="text" class="panel-input" data-pp="requester_name" data-i="${i}" value="${(p.requester_name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Deep Patel"></div>
         <div class="panel-field"><label class="panel-label">Requester WhatsApp (used for Edit Key)</label><input type="tel" class="panel-input" data-pp="requester_whatsapp" data-i="${i}" value="${(p.requester_whatsapp||'').replace(/"/g,'&quot;')}" placeholder="e.g. +971 55 348 8512"></div>
         <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
@@ -2198,7 +2234,7 @@ function renderPeopleRepeater(){
           <div style="font-size:.7rem;color:#8b0028;font-style:italic;margin-top:.35rem;">Reviews survive wipe.</div>
         </div>
         <div class="panel-field" style="text-align:center;display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center;">
-          <button type="button" class="repeat-add pw-gen" data-i="${i}" style="background:#2a5fd1;">🎲 Generate Viewer Password</button>
+          <button type="button" class="repeat-add pw-gen" data-i="${i}" style="background:#2a5fd1;">🎲 Generate View Key (8-char)</button>
           <button type="button" class="repeat-add share-btn" data-i="${i}" style="background:linear-gradient(135deg,#25D366,#128C7E);">📲 Share via WhatsApp</button>
           <button type="button" class="view-details-btn" data-view-i="${i}">👁️ View Details</button>
           <button type="button" class="panel-btn danger" data-del-person="${i}" style="min-width:0;padding:.4rem .9rem;font-size:.8rem;">🗑️ Delete person</button>
@@ -2228,6 +2264,11 @@ function renderPeopleRepeater(){
         renderPeopleRepeater();
       } else if(el.dataset.pp){
         S.PEOPLE[i][el.dataset.pp]=el.value;
+        if(el.dataset.pp==='password'){
+          // 🔒 View Key: enforce the same rules as Edit Key — uppercase, max 8 characters
+          const norm=normalizeViewPw(el.value);
+          S.PEOPLE[i].password=norm; el.value=norm;
+        }
         if(el.dataset.pp==='requester_name'||el.dataset.pp==='requester_whatsapp'||el.dataset.pp==='slug'){
           const prevFocus = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.pp;
           const prevVal = document.activeElement ? document.activeElement.value : '';
@@ -2241,7 +2282,8 @@ function renderPeopleRepeater(){
       }
     };
   });
-  w.querySelectorAll('.pw-gen').forEach(b=>{ b.onclick=(e)=>{ e.stopPropagation(); const i=+b.dataset.i; const p=S.PEOPLE[i]; const nm=(p.display_name||'Friend').replace(/[^A-Za-z]/g,'').slice(0,10)||'Friend'; let dd='0000'; if(p.birthday){const d=new Date(p.birthday);if(!isNaN(d.getTime()))dd=String(d.getDate()).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')} const words=['Sunshine','Rainbow','Blossom','Starlight','Rose','Lotus','Velvet','Amber','Crystal','Dream']; const wd=words[Math.floor(Math.random()*words.length)]; p.password=nm.charAt(0).toUpperCase()+nm.slice(1).toLowerCase()+'-'+dd+'-'+wd; S.EXPANDED_PEOPLE.add(personKey(p,i)); renderPeopleRepeater(); }; });
+  w.querySelectorAll('.pw-gen').forEach(b=>{ b.onclick=(e)=>{ e.stopPropagation(); const i=+b.dataset.i; const p=S.PEOPLE[i]; // 🔒 View Key — same rules as Edit Key: unique, max 8 characters
+    p.password=ensureUniqueViewPw(makeViewerPassword(p.display_name,p.birthday,p.slug),S.PEOPLE,i); S.EXPANDED_PEOPLE.add(personKey(p,i)); renderPeopleRepeater(); }; });
   w.querySelectorAll('.share-btn').forEach(b=>{ b.onclick=(e)=>{ e.stopPropagation(); openShareModal(S.PEOPLE[+b.dataset.i],null); }; });
   w.querySelectorAll('[data-view-i]').forEach(b=>{ b.onclick=(e)=>{ e.stopPropagation(); openPersonDetails(S.PEOPLE[+b.dataset.viewI]); }; });
   w.querySelectorAll('[data-del-person]').forEach(b=>{ b.onclick=(e)=>{
@@ -2269,12 +2311,8 @@ function apRefreshEditPwPreview(){
   if(otpEl)otpEl.value=makePrivateOtp(pw)||'';
 }
 function apGeneratePw(){
-  const nm=(($('ap_name').value||'Friend').replace(/[^A-Za-z]/g,'').slice(0,10))||'Friend';
-  const bday=$('ap_birthday').value;let dd='0000';
-  if(bday){const d=new Date(bday);if(!isNaN(d.getTime()))dd=String(d.getDate()).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')}
-  const words=['Sunshine','Rainbow','Blossom','Starlight','Rose','Lotus','Velvet','Amber','Crystal','Dream'];
-  const wd=words[Math.floor(Math.random()*words.length)];
-  $('ap_password').value=nm.charAt(0).toUpperCase()+nm.slice(1).toLowerCase()+'-'+dd+'-'+wd;
+  // 🔒 View Key — same rules as the Edit Key: unique, max 8 characters, uppercase (e.g. T9RK3XQW)
+  $('ap_password').value=ensureUniqueViewPw(makeViewerPassword($('ap_name').value,$('ap_birthday').value,$('ap_slug').value),S.PEOPLE);
 }
 function apOpenModal(){
   apResetForm();
@@ -2299,7 +2337,9 @@ async function apSavePerson(){
   const dupe=S.PEOPLE.find(p=>p.slug&&p.slug.toLowerCase()===slug);
   if(dupe){ st.textContent='❌ Login ID "'+slug+'" is already used.'; st.className='panel-status err'; return false; }
   const wipeIso=wipeLocal?zonedToUTC(wipeLocal,wipeTz):null;
-  const row={slug,display_name:name,password:password||'',birthday:birthday||null,wipe_iso:wipeIso,enabled:true,sort_order:S.PEOPLE.length,requester_name:requester_name||'',requester_whatsapp:requester_whatsapp||''};
+  // 🔒 View Key: auto-generate when left blank — unique, max 8 characters (same rules as Edit Key)
+  const viewPw=password?normalizeViewPw(password):(ensureUniqueViewPw(makeViewerPassword(name,birthday,slug),S.PEOPLE)||'');
+  const row={slug,display_name:name,password:viewPw,birthday:birthday||null,wipe_iso:wipeIso,enabled:true,sort_order:S.PEOPLE.length,requester_name:requester_name||'',requester_whatsapp:requester_whatsapp||''};
   st.textContent='⏳ Saving to cloud…'; st.className='panel-status';
   let savedId=null;
   try{ const r=await sb.insPerson(row); if(r&&r[0]&&r[0].id)savedId=r[0].id; }
@@ -2588,7 +2628,14 @@ async function saveAdminAll(){
     let slug=(p.slug||('person-'+Date.now()+'-'+i)).toLowerCase().replace(/[^a-z0-9\-_]/g,'');
     while(usedSlugs.has(slug))slug=slug+'-'+Math.floor(Math.random()*1000);
     usedSlugs.add(slug);p.slug=slug;
-    const row={slug,display_name:p.display_name||('Person '+(i+1)),password:p.password||'',birthday:p.birthday||null,wipe_iso:p.wipe_iso||null,enabled:true,sort_order:i,requester_name:p.requester_name||'',requester_whatsapp:p.requester_whatsapp||''};
+    // ✏️ Edit Key: enforce uniqueness across all people (same 8-char rules as before)
+    const editBase=getEditPasswordForPerson(p);
+    if(editBase)p.edit_password=ensureUniqueEditPw(editBase,S.PEOPLE,i);
+    // 🔒 View Key: auto-generate when blank/legacy — unique, max 8 characters (same rules as Edit Key)
+    const storedView=normalizeViewPw(p.password);
+    const viewPw=storedView||ensureUniqueViewPw(makeViewerPassword(p.display_name,p.birthday,slug),S.PEOPLE,i);
+    if(viewPw&&viewPw!==p.password){p.password=viewPw;}
+    const row={slug,display_name:p.display_name||('Person '+(i+1)),password:viewPw,birthday:p.birthday||null,wipe_iso:p.wipe_iso||null,enabled:true,sort_order:i,requester_name:p.requester_name||'',requester_whatsapp:p.requester_whatsapp||''};
     if(!p.id){ let r;try{ r=await sb.insPerson(row);}catch(e){ delete row.wipe_iso;delete row.birthday;delete row.requester_whatsapp;delete row.requester_name; r=await sb.insPerson(row); } if(r&&r[0]&&r[0].id)p.id=r[0].id; }
     else{ try{await sb.updPerson(p.id,row)}catch(e){ delete row.wipe_iso;delete row.birthday;delete row.requester_whatsapp;delete row.requester_name; await sb.updPerson(p.id,row); } }
     if(p.id)keepIds.add(p.id);
@@ -2995,6 +3042,14 @@ function collectGE(){
   GE.person.slug=String(GE.person.slug||'').toLowerCase().replace(/[^a-z0-9\-_]/g,'');
   GE.person.birthday=String(GE.person.birthday||'').slice(0,10);
   GE.password=$('ge_password').value.trim();
+  // 🔒 View Key: enforce same rules as Edit Key — uppercase, max 8 characters; auto-generate when blank
+  if(GE.password){
+    const normV=normalizeViewPw(GE.password);
+    GE.password=normV; $('ge_password').value=normV;
+  } else {
+    const autoV=ensureUniqueViewPw(makeViewerPassword(GE.person.display_name,GE.person.birthday,GE.person.slug),S.PEOPLE);
+    if(autoV){GE.password=autoV;$('ge_password').value=autoV;}
+  }
   $('ge_editpw_preview').value=makeRequesterEditPassword(GE.guest.name,GE.guest.whatsapp,GE.person.slug);
   const gpoEl=$('ge_private_otp_preview');if(gpoEl)gpoEl.value=makePrivateOtp($('ge_editpw_preview').value)||'';
 }
@@ -3071,14 +3126,10 @@ async function approveGuestRow(r,overridePassword,skipStatusUpdate){
     if(!display_name||!slug)return{ok:false,err:'Missing name/slug'};
     const freshPeople=await sb.people()||[];
     if(freshPeople.find(p=>p.slug===slug))slug=slug+'-'+Math.floor(Math.random()*1000);
-    let password=overridePassword;
+    let password=overridePassword?normalizeViewPw(overridePassword):'';
     if(!password){
-      const nm=(display_name||'Friend').replace(/[^A-Za-z]/g,'').slice(0,10)||'Friend';
-      let dd='0000';
-      if(birthday){const d=new Date(birthday);if(!isNaN(d.getTime()))dd=String(d.getDate()).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')}
-      const words=['Sunshine','Rainbow','Blossom','Starlight','Rose','Lotus','Velvet','Amber','Crystal','Dream'];
-      const wd=words[Math.floor(Math.random()*words.length)];
-      password=nm.charAt(0).toUpperCase()+nm.slice(1).toLowerCase()+'-'+dd+'-'+wd;
+      // 🔒 View Key — same rules as Edit Key: auto-generated, unique, max 8 characters
+      password=ensureUniqueViewPw(makeViewerPassword(display_name,birthday,slug),freshPeople);
     }
     const row={slug,display_name,birthday:birthday||null,password,wipe_iso:null,enabled:true,sort_order:freshPeople.length,requester_name:(gi.name||r.guest_name||'').trim(),requester_whatsapp:(gi.whatsapp||r.guest_whatsapp||'').trim()};
     let newPersonId=null;
