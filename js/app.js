@@ -160,6 +160,18 @@ function getEditPasswordForPerson(p){
   if(!p)return '';
   return makeRequesterEditPassword(p.requester_name||'',p.requester_whatsapp||'',p.slug||'');
 }
+// Private-media OTP: deterministic 6-digit code derived from the Requester's edit password.
+// Generated ONLY in the Requester Portal (when requester name + WhatsApp + slug are filled) and shared with the couple.
+function makePrivateOtp(editPw){
+  const s=String(editPw||'');
+  if(!s)return '';
+  let h=2166136261>>>0;
+  for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}
+  return String(h%1000000).padStart(6,'0');
+}
+function getPrivateOtpForPerson(p){
+  return makePrivateOtp(getEditPasswordForPerson(p));
+}
 function shuffleArray(arr){
   const a=(arr||[]).slice();
   for(let i=a.length-1;i>0;i--){
@@ -1317,9 +1329,41 @@ $('openBtn').onclick=async()=>{
 };
 $('privateBtn').onclick=async()=>{
   if(!S.CURRENT_PERSON){alert('No person selected.');return}
-  const rows=await sb.rows(T_MEDIA,S.CURRENT_PERSON.id)||[];
-  await SS_openFromRows(rows,'private');
+  // 🔒 Private media is OTP-protected. The 6-digit OTP is generated ONLY in the Requester Portal
+  // (derived from the Requester EDIT password created when requester name + WhatsApp were added).
+  const privOtp=getPrivateOtpForPerson(S.CURRENT_PERSON);
+  if(!privOtp){alert('🔒 Private memories are locked. An OTP must be generated in the Requester Portal first (requires Requester name + WhatsApp).');return}
+  const unlocked=(()=>{try{return sessionStorage.getItem('priv_unlocked_'+(S.CURRENT_PERSON.slug||S.CURRENT_PERSON.id))==='1'}catch(e){return false}})();
+  if(unlocked){
+    const rows=await sb.rows(T_MEDIA,S.CURRENT_PERSON.id)||[];
+    await SS_openFromRows(rows,'private');
+    return;
+  }
+  const errEl=$('privateOtpError');if(errEl)errEl.textContent='';
+  const inp=$('privateOtpInput');if(inp)inp.value='';
+  show($('privateOtpModal'));
+  if(inp)setTimeout(()=>inp.focus(),80);
 };
+function privOtpFail(msg){
+  const errEl=$('privateOtpError');
+  if(errEl)errEl.textContent=msg||'❌ Incorrect OTP. Ask the requester for the 6-digit code from the Requester Portal.';
+}
+function privOtpTrySubmit(){
+  const inp=$('privateOtpInput'),errEl=$('privateOtpError');
+  if(errEl)errEl.textContent='';
+  if(!inp)return;
+  const val=String(inp.value||'').replace(/\D/g,'');
+  inp.value=val;
+  const expected=getPrivateOtpForPerson(S.CURRENT_PERSON);
+  if(!expected){hide($('privateOtpModal'));alert('🔒 No OTP exists for this card yet. It is generated in the Requester Portal.');return}
+  if(val!==expected){privOtpFail();return}
+  try{sessionStorage.setItem('priv_unlocked_'+(S.CURRENT_PERSON.slug||S.CURRENT_PERSON.id),'1')}catch(e){}
+  hide($('privateOtpModal'));
+  sb.rows(T_MEDIA,S.CURRENT_PERSON.id).then(rows=>SS_openFromRows(rows||[],'private')).catch(()=>alert('Could not load private memories.'));
+}
+$('privateOtpSubmit').onclick=privOtpTrySubmit;
+$('privateOtpClose').onclick=()=>{const e=$('privateOtpError');if(e)e.textContent='';hide($('privateOtpModal'))};
+$('privateOtpInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();privOtpTrySubmit()}});
 
 function SS_buildSlides(){
   const t=$('slidesTrack');t.innerHTML='';
@@ -1928,6 +1972,7 @@ function renderPeopleRepeater(){
     const idPill='<span class="person-id-pill">#'+(p.id||'new')+'</span>';
     const editPw=getEditPasswordForPerson(p);
     const editPwBadge=editPw?('<span class="editpw-badge">✏️ '+editPw+'</span>'):'<span class="editpw-badge" style="background:#f8f8f8;color:#888;border-color:#888;">✏️ needs Requester name + WhatsApp</span>';
+    const privOtpBadge=(()=>{const o=getPrivateOtpForPerson(p);return o?('<span class="editpw-badge" style="background:#0d5c4a;border-color:#0d5c4a;">🔒 OTP '+o+'</span>'):'<span class="editpw-badge" style="background:#f8f8f8;color:#888;border-color:#888;">🔒 no private OTP</span>'})();
     const tzOptsHtml=TZ_OPTIONS.map(o=>`<option value="${o.v}"${o.v===wipeTz?' selected':''}>${o.l}</option>`).join('');
     const loginId=(p.slug||'—');
 
@@ -1941,7 +1986,7 @@ function renderPeopleRepeater(){
     summary.innerHTML=`
       <div class="pc-emoji">💝</div>
       <div class="pc-body">
-        <div class="pc-name">${(p.display_name||'Unnamed').replace(/</g,'&lt;')} ${idPill} ${wipeBadge} ${editPwBadge}</div>
+        <div class="pc-name">${(p.display_name||'Unnamed').replace(/</g,'&lt;')} ${idPill} ${wipeBadge} ${editPwBadge} ${privOtpBadge}</div>
         <div class="pc-meta"><span class="pc-id">Login ID: ${(loginId||'').replace(/</g,'&lt;')}</span></div>
       </div>
       <div class="pc-chev">▼</div>
@@ -1967,6 +2012,9 @@ function renderPeopleRepeater(){
           <label class="panel-label" style="color:#1a3d8f;">✏️ Requester EDIT password (auto)</label>
           <input type="text" class="panel-input" data-pp="editpw_readonly" data-i="${i}" readonly value="${editPw||''}" style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
           <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Format: {FirstName}-EDIT-{last4digits}-{slug}</div>
+          <label class="panel-label" style="color:#0d5c4a;margin-top:.5rem;display:block;">🔒 Private Media OTP (auto — required to open the private slideshow)</label>
+          <input type="text" class="panel-input" data-pp="otp_readonly" data-i="${i}" readonly value="${getPrivateOtpForPerson(p)||''}" style="background:#e9f7f1;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
+          <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">6-digit code generated from the edit password. Share it with the couple so they can unlock “Open Our Private Memories”.</div>
         </div>
         <div class="panel-field" style="padding:.5rem;background:#fff0f0;border:1px dashed #8b0028;border-radius:.6rem;">
           <label class="panel-label" style="color:#8b0028;">🗓️ Auto-wipe this person on (date + time + timezone)</label>
@@ -1991,7 +2039,7 @@ function renderPeopleRepeater(){
   w.querySelectorAll('input,select').forEach(el=>{
     el.oninput=el.onchange=()=>{
       const i=+el.dataset.i;
-      if(el.dataset.pp==='editpw_readonly')return;
+      if(el.dataset.pp==='editpw_readonly'||el.dataset.pp==='otp_readonly')return;
       if(el.dataset.pp==='wipe_local'){
         const tzEl=w.querySelector('.tz-select[data-pp="wipe_tz"][data-i="'+i+'"]');
         const tz=tzEl?tzEl.value:DEFAULT_TZ;
@@ -2037,12 +2085,15 @@ function renderPeopleRepeater(){
 function apResetForm(){
   $('ap_name').value='';$('ap_slug').value='';$('ap_password').value='';$('ap_birthday').value='';
   $('ap_requester').value='';$('ap_requester_wa').value='';$('ap_wipe_local').value='';$('ap_editpw_preview').value='';
+  const otpEl=$('ap_private_otp_preview');if(otpEl)otpEl.value='';
   const tzEl=$('ap_wipe_tz'); if(tzEl){fillTzSelect(tzEl,DEFAULT_TZ);tzEl.value=DEFAULT_TZ;}
   const st=$('ap_status');if(st){st.textContent='';st.className='panel-status'}
 }
 function apRefreshEditPwPreview(){
   const pw=makeRequesterEditPassword($('ap_requester').value,$('ap_requester_wa').value,$('ap_slug').value);
   $('ap_editpw_preview').value=pw;
+  const otpEl=$('ap_private_otp_preview');
+  if(otpEl)otpEl.value=makePrivateOtp(pw)||'';
 }
 function apGeneratePw(){
   const nm=(($('ap_name').value||'Friend').replace(/[^A-Za-z]/g,'').slice(0,10))||'Friend';
@@ -2139,6 +2190,7 @@ function openShareModal(person,guest){
     +'<div><strong>Login ID / Slug:</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.slug||'')+'</code></div>'
     +'<div><strong>Card Password (viewer):</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.password||'(not set)')+'</code></div>'
     +'<div><strong>Requester EDIT password:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw||'(add Requester name + WhatsApp)')+'</code></div>'
+    +'<div><strong>🔒 Private Media OTP (6-digit):</strong> <code style="background:#e9f7f1;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.15em;">'+esc(makePrivateOtp(editPw)||'(generated after edit password exists)')+'</code></div>'
     +'<div style="margin-top:.5rem;"><strong>Card link:</strong> <a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">'+esc(link)+'</a></div>'
     +'</div>'
     +'<div style="background:linear-gradient(135deg,#e8f5f0,#d3ede1);border:2px solid #0d5c4a;border-radius:.8rem;padding:.8rem;margin-bottom:.8rem;font-size:.86rem;line-height:1.7;">'
@@ -2167,7 +2219,7 @@ function openShareModal(person,guest){
 $('shareModalClose').onclick=()=>hide($('shareModal'));
 function buildShareMessage(requesterName,person,link,editPw){
   const name=requesterName||'there';
-  return ['Hi '+name+' 💕','','Your surprise for *'+(person.display_name||person.slug)+'* is ready! 🎉','','🔑 Login ID: '+(person.slug||''),'🔒 Card Password (viewer): '+(person.password||''),'✏️ Requester EDIT password: '+(editPw||''),'🌐 Open here: '+link,'','How to use:','• To VIEW the surprise → use the Card Password.','• To EDIT the card → use the Requester EDIT password (you will see an ✏️ Edit Card button).','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the Card Password (view) OR the Requester EDIT password (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
+  return ['Hi '+name+' 💕','','Your surprise for *'+(person.display_name||person.slug)+'* is ready! 🎉','','🔑 Login ID: '+(person.slug||''),'🔒 Card Password (viewer): '+(person.password||''),'✏️ Requester EDIT password: '+(editPw||''),'🔐 Private Memories OTP (6-digit, needed to open the private slideshow): '+(makePrivateOtp(editPw)||''),'🌐 Open here: '+link,'','How to use:','• To VIEW the surprise → use the Card Password.','• To EDIT the card → use the Requester EDIT password (you will see an ✏️ Edit Card button).','• To open 📸 Private Memories → enter the 6-digit OTP when prompted.','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the Card Password (view) OR the Requester EDIT password (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
 }
 
 async function openPersonDetails(p){
@@ -2218,6 +2270,7 @@ async function openPersonDetails(p){
     + row('Requester name',p.requester_name||'')
     + row('Requester WhatsApp',p.requester_whatsapp||'')
     + row('✏️ Requester EDIT password',editPw||'(missing requester name/whatsapp)')
+    + row('🔒 Private Media OTP (6-digit)',makePrivateOtp(editPw)||'(generated after edit password exists)')
     + row('🗓️ Wipe on',p.wipe_iso?(new Date(p.wipe_iso).toISOString()+' · '+utcToZonedLocal(p.wipe_iso,p.wipe_iso_tz||DEFAULT_TZ)+' '+(p.wipe_iso_tz||DEFAULT_TZ)):'')
     + row('Card link',link)
     + '</div>';
@@ -2739,6 +2792,7 @@ function openGuestEditor(guestRow){
   document.querySelectorAll('#ge-pane-person .ge-guest').forEach(el=>{ const k=el.dataset.gg;if(!k)return; el.value=GE.guest[k]!==undefined?GE.guest[k]:''; });
   $('ge_password').value='';
   $('ge_editpw_preview').value=makeRequesterEditPassword(GE.guest.name,GE.guest.whatsapp,GE.person.slug);
+  const gpoEl=$('ge_private_otp_preview');if(gpoEl)gpoEl.value=makePrivateOtp($('ge_editpw_preview').value)||'';
   buildGETextFields();
   geSetLangActive('en');
   renderGETheme();
@@ -2763,6 +2817,7 @@ function collectGE(){
   GE.person.birthday=String(GE.person.birthday||'').slice(0,10);
   GE.password=$('ge_password').value.trim();
   $('ge_editpw_preview').value=makeRequesterEditPassword(GE.guest.name,GE.guest.whatsapp,GE.person.slug);
+  const gpoEl=$('ge_private_otp_preview');if(gpoEl)gpoEl.value=makePrivateOtp($('ge_editpw_preview').value)||'';
 }
 function buildGEPayload(){
   const sharedOut={};
