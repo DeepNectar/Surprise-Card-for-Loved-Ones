@@ -864,7 +864,7 @@ $('uploadSubmit').onclick=async()=>{
 };
 
 let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
-function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
+function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
 
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
@@ -1104,6 +1104,9 @@ function SS_fadeMusic(target,duration){
 }
 function SS_normalMusicVol(){ return getVol('slideshow'); }
 function SS_duckedMusicVol(){ return Math.max(0.05,SS_normalMusicVol()*0.35); }
+// musicDuringVideo: when ON, background music keeps playing under video slides at vol_video_music (default 0.35) instead of ducking to 40%.
+function SS_isMusicDuringVideo(){ return String((S.CURR.shared||{}).musicDuringVideo)==='true'; }
+function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'):SS_normalMusicVol(); }
 
 // FIX 4: music_mode='card' means no new playlist for slideshow
 function SS_ensureMusicPlaying(){
@@ -1471,7 +1474,10 @@ function SS_updateSlide(){
   SS_applyEffectToCurrent();
 
   if(cur.type==='video'){
-    if(SS_musicDucked!==true){
+    if(SS_isMusicDuringVideo()){
+      // Keep music playing under the video at vol_video_music (no ducking)
+      if(SS_musicDucked!==false){ SS_fadeMusic(getVol('videomusic'),300); SS_musicDucked=false; }
+    } else if(SS_musicDucked!==true){
       SS_fadeMusic(SS_duckedMusicVol(),300);
       SS_musicDucked=true;
     }
@@ -1506,7 +1512,7 @@ function SS_updateSlide(){
       }
     }
     if(SS_musicDucked!==false){
-      SS_fadeMusic(SS_normalMusicVol(),300);
+      SS_fadeMusic(SS_musicTargetVol(),300);
       SS_musicDucked=false;
     }
 
@@ -1890,6 +1896,8 @@ function fillAdminFields(){
   for(let i=1;i<=5;i++){ const onEl=$('f_song'+i+'_on');if(onEl)onEl.checked=(String(sh['song'+i+'_on'])==='true'); set('f_song'+i+'_url',sh['song'+i+'_url']); const wEl=$('f_song'+i+'_where');if(wEl)wEl.value=sh['song'+i+'_where']||'both'; }
   const v=(id,key,def)=>{const el=$(id);if(!el)return;el.value=sh[key]||def;const lab=$(id+'_val');if(lab)lab.textContent=el.value};
   v('f_vol_card','vol_card','0.45');v('f_vol_slide','vol_slide','0.85');v('f_vol_video','vol_video','1.0');
+  v('f_vol_video_music','vol_video_music','0.35');
+  tgl('f_musicDuringVideo',sh.musicDuringVideo);
   v('f_pinSlideDuration','pinSlideDuration','4');v('f_storySlideDuration','storySlideDuration','10');
   const el1=$('f_pinSlideDefaultSec');if(el1)el1.value=sh.pinSlideDefaultSec||'10';
   const el2=$('f_storySlideDefaultSec');if(el2)el2.value=sh.storySlideDefaultSec||'10';
@@ -1935,6 +1943,8 @@ function readAdminFields(){
   document.querySelectorAll('input[name="music_mode"]').forEach(r=>{if(r.checked)sh.music_mode=r.value});
   for(let i=1;i<=5;i++){ sh['song'+i+'_on']=(($('f_song'+i+'_on')||{}).checked)?'true':'false'; sh['song'+i+'_url']=g('f_song'+i+'_url'); sh['song'+i+'_where']=(($('f_song'+i+'_where')||{}).value)||'both'; }
   sh.vol_card=g('f_vol_card');sh.vol_slide=g('f_vol_slide');sh.vol_video=g('f_vol_video');
+  sh.vol_video_music=g('f_vol_video_music');
+  sh.musicDuringVideo=tgl('f_musicDuringVideo');
   sh.pinSlideDuration=g('f_pinSlideDuration');sh.storySlideDuration=g('f_storySlideDuration');
   sh.pinSlideDefaultSec=g('f_pinSlideDefaultSec');sh.storySlideDefaultSec=g('f_storySlideDefaultSec');
   sh.defaultLang=g('f_defaultLang')||'en';
@@ -1945,7 +1955,7 @@ document.querySelectorAll('#themeGrid .theme-swatch').forEach(el=>{
   el.onclick=()=>{ S.CURR.shared.theme=el.dataset.themePick; document.querySelectorAll('#themeGrid .theme-swatch').forEach(x=>x.classList.toggle('selected',x===el)); document.body.setAttribute('data-theme',el.dataset.themePick); };
 });
 document.addEventListener('input',(e)=>{
-  ['f_vol_card','f_vol_slide','f_vol_video','f_pinSlideDuration','f_storySlideDuration','f_effectsIntensity'].forEach(id=>{
+  ['f_vol_card','f_vol_slide','f_vol_video','f_vol_video_music','f_pinSlideDuration','f_storySlideDuration','f_effectsIntensity'].forEach(id=>{
     if(e.target&&e.target.id===id){const lab=$(id+'_val');if(lab)lab.textContent=e.target.value}
   });
   if(e.target&&e.target.id==='f_floaterDensity'){const lab=$('f_floaterDensity_val');if(lab)lab.textContent=e.target.value}
