@@ -1,4 +1,4 @@
-nohup: ignoring input
-127.0.0.1 - - [09/Oct/2026 10:37:13] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [09/Oct/2026 10:37:16] "GET /css/styles.css HTTP/1.1" 200 -
-127.0.0.1 - - [09/Oct/2026 10:37:16] "GET /js/app.js HTTP/1.1" 200 -
+127.0.0.1 - - [09/Oct/2026 10:38:56] "HEAD /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [09/Oct/2026 10:38:58] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [09/Oct/2026 10:38:58] "GET /css/styles.css HTTP/1.1" 200 -
+127.0.0.1 - - [09/Oct/2026 10:38:58] "GET /js/app.js HTTP/1.1" 200 -
