@@ -29,8 +29,8 @@
     <div class="hi-step">
       <div class="hi-num">2</div>
       <div class="hi-body">
-        <div class="hi-h">Enter your password</div>
-        <div class="hi-p">Use the <strong>Card Password</strong> to view the surprise, or the <strong>EDIT password</strong> if you're the person who made it and want to change something.</div>
+        <div class="hi-h">Enter your View Key or Edit Key</div>
+        <div class="hi-p">Use the <strong>View Key</strong> to view the surprise, or the <strong>Edit Key</strong> if you're the person who made it and want to change something.</div>
       </div>
     </div>
     <div class="hi-step">
@@ -145,7 +145,7 @@
 <div class="pw-modal" id="personLoginModal">
 <div class="pw-content">
 <div class="pw-icon">🔐</div>
-<div class="pw-title" id="personLoginTitle">Enter your password</div>
+<div class="pw-title" id="personLoginTitle">Enter your key</div>
 <div class="pw-sub" id="personLoginSub"></div>
 <input type="password" class="pw-input" id="personPwInput" placeholder="Password">
 <div class="pw-error" id="personPwError">❌ Incorrect password.</div>
@@ -189,19 +189,19 @@
 <div class="panel-sub">Fill the basics. You can add theme, texts, gifts, etc. later by expanding the person's row.</div>
 <div class="panel-field"><label class="panel-label">Display Name <span style="color:#c41e3a;">*required</span></label><input type="text" class="panel-input" id="ap_name" placeholder="e.g. Vrunda"></div>
 <div class="panel-field"><label class="panel-label">Login ID / Slug <span style="color:#c41e3a;">*required</span></label><input type="text" class="panel-input" id="ap_slug" placeholder="e.g. vrunda (lowercase, no spaces)"></div>
-<div class="panel-field"><label class="panel-label">Card Password (viewer)</label><input type="text" class="panel-input" id="ap_password" placeholder="Click 🎲 below to generate"></div>
+<div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ap_password" placeholder="Click 🎲 below to generate"></div>
 <div class="panel-field"><label class="panel-label">Birthday</label><input type="date" class="panel-input" id="ap_birthday"></div>
 <div class="panel-field"><label class="panel-label">Requester name (shown on reviews)</label><input type="text" class="panel-input" id="ap_requester" placeholder="e.g. Deep Patel"></div>
-<div class="panel-field"><label class="panel-label">Requester WhatsApp (used for edit password)</label><input type="tel" class="panel-input" id="ap_requester_wa" placeholder="e.g. +971 55 348 8512"></div>
+<div class="panel-field"><label class="panel-label">Requester WhatsApp (used for Edit Key)</label><input type="tel" class="panel-input" id="ap_requester_wa" placeholder="e.g. +971 55 348 8512"></div>
 <div class="panel-field" style="padding:.55rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
-  <label class="panel-label" style="color:#1a3d8f;">✏️ Requester EDIT password (auto-generated)</label>
+  <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
   <input type="text" class="panel-input" id="ap_editpw_preview" readonly style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;" placeholder="(requires Requester name + WhatsApp + Slug)">
   <div style="font-size:.7rem;color:#1a3d8f;font-style:italic;margin-top:.35rem;">Format: <code>{FirstName}-EDIT-{last4digits}-{slug}</code></div>
 </div>
 <div class="panel-field" style="padding:.55rem;background:#e9f7f1;border:1px dashed #0d5c4a;border-radius:.6rem;">
   <label class="panel-label" style="color:#0d5c4a;">🔒 Private Media OTP (auto-generated — required to open the private slideshow)</label>
   <input type="text" class="panel-input" id="ap_private_otp_preview" readonly style="background:#f2fbf7;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
-  <div style="font-size:.7rem;color:#0d5c4a;font-style:italic;margin-top:.35rem;">6-digit code derived from the edit password. Only generated here in the portal — share it with the couple so they can unlock “Open Our Private Memories”.</div>
+  <div style="font-size:.7rem;color:#0d5c4a;font-style:italic;margin-top:.35rem;">6-digit code derived from the Edit Key. Only generated here in the portal — share it with the couple so they can unlock “Open Our Private Memories”.</div>
 </div>
 <div class="panel-field" style="padding:.55rem;background:#fff0f0;border:1px dashed #8b0028;border-radius:.6rem;">
   <label class="panel-label" style="color:#8b0028;">🗓️ Auto-wipe this person on (optional)</label>
@@ -279,9 +279,9 @@
   </div>
   <div class="panel-section">
     <div class="panel-section-title">🔑 Passwords</div>
-    <div class="panel-field"><label class="panel-label">Card password (viewer)</label><input type="text" class="panel-input" id="ge_password" placeholder="Leave blank to auto-generate"></div>
+    <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" id="ge_password" placeholder="Leave blank to auto-generate"></div>
     <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
-      <label class="panel-label" style="color:#1a3d8f;">✏️ Requester EDIT password (auto)</label>
+      <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
       <input type="text" class="panel-input" id="ge_editpw_preview" readonly style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
     </div>
     <div class="panel-field" style="padding:.5rem;background:#e9f7f1;border:1px dashed #0d5c4a;border-radius:.6rem;">
@@ -380,7 +380,7 @@
 <div class="panel-content" style="max-width:420px;">
 <button class="panel-close" id="privateOtpClose">✕</button>
 <div class="panel-title">🔒 Private Memories — OTP Required</div>
-<div class="panel-sub">This album is protected. Enter the 6-digit OTP that was generated in the Requester Portal when the Requester Edit Password was added.</div>
+<div class="panel-sub">This album is protected. Enter the 6-digit OTP that was generated in the Requester Portal when the Edit Key was added.</div>
 <div class="panel-field"><label class="panel-label">Enter 6-digit OTP</label><input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="panel-input" id="privateOtpInput" placeholder="••••••" style="font-family:monospace;font-size:1.4rem;letter-spacing:.5em;text-align:center;font-weight:800;"></div>
 <div class="panel-status" id="privateOtpError" style="color:#c41e3a;"></div>
 <button class="panel-btn save" id="privateOtpSubmit" type="button">🔓 Unlock Private Memories</button>
@@ -621,7 +621,7 @@
 <div class="panel-pane" id="pane-people">
   <div class="panel-section">
     <div class="panel-section-title">👥 People — Complete List</div>
-    <div class="panel-sub" style="text-align:left;margin-bottom:.6rem;">Click a person to expand and edit. Set requester name + WhatsApp to enable the edit password.</div>
+    <div class="panel-sub" style="text-align:left;margin-bottom:.6rem;">Click a person to expand and edit. Set requester name + WhatsApp to enable the Edit Key.</div>
     <button type="button" class="add-person-btn" id="openAddPersonBtn"><span class="apb-emoji">➕</span><span>Add New Person</span></button>
     <div class="people-toolbar">
       <div class="pt-info" id="peopleCountInfo"></div>
