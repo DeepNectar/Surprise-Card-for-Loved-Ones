@@ -198,6 +198,11 @@
   <input type="text" class="panel-input" id="ap_editpw_preview" readonly style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;" placeholder="(requires Requester name + WhatsApp + Slug)">
   <div style="font-size:.7rem;color:#1a3d8f;font-style:italic;margin-top:.35rem;">Format: <code>{FirstName}-EDIT-{last4digits}-{slug}</code></div>
 </div>
+<div class="panel-field" style="padding:.55rem;background:#e9f7f1;border:1px dashed #0d5c4a;border-radius:.6rem;">
+  <label class="panel-label" style="color:#0d5c4a;">🔒 Private Media OTP (auto-generated — required to open the private slideshow)</label>
+  <input type="text" class="panel-input" id="ap_private_otp_preview" readonly style="background:#f2fbf7;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
+  <div style="font-size:.7rem;color:#0d5c4a;font-style:italic;margin-top:.35rem;">6-digit code derived from the edit password. Only generated here in the portal — share it with the couple so they can unlock “Open Our Private Memories”.</div>
+</div>
 <div class="panel-field" style="padding:.55rem;background:#fff0f0;border:1px dashed #8b0028;border-radius:.6rem;">
   <label class="panel-label" style="color:#8b0028;">🗓️ Auto-wipe this person on (optional)</label>
   <div class="tz-row">
@@ -278,6 +283,11 @@
     <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
       <label class="panel-label" style="color:#1a3d8f;">✏️ Requester EDIT password (auto)</label>
       <input type="text" class="panel-input" id="ge_editpw_preview" readonly style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
+    </div>
+    <div class="panel-field" style="padding:.5rem;background:#e9f7f1;border:1px dashed #0d5c4a;border-radius:.6rem;">
+      <label class="panel-label" style="color:#0d5c4a;">🔒 Private Media OTP (auto)</label>
+      <input type="text" class="panel-input" id="ge_private_otp_preview" readonly style="background:#f2fbf7;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;">
+      <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">Required to open “Open Our Private Memories”.</div>
     </div>
   </div>
 </div>
@@ -363,6 +373,17 @@
   <button type="button" class="panel-btn cancel" id="geCancel">Cancel</button>
 </div>
 <div class="panel-status" id="geStatus"></div>
+</div>
+</div>
+
+<div class="panel-modal" id="privateOtpModal">
+<div class="panel-content" style="max-width:420px;">
+<button class="panel-close" id="privateOtpClose">✕</button>
+<div class="panel-title">🔒 Private Memories — OTP Required</div>
+<div class="panel-sub">This album is protected. Enter the 6-digit OTP that was generated in the Requester Portal when the Requester Edit Password was added.</div>
+<div class="panel-field"><label class="panel-label">Enter 6-digit OTP</label><input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="panel-input" id="privateOtpInput" placeholder="••••••" style="font-family:monospace;font-size:1.4rem;letter-spacing:.5em;text-align:center;font-weight:800;"></div>
+<div class="panel-status" id="privateOtpError" style="color:#c41e3a;"></div>
+<button class="panel-btn save" id="privateOtpSubmit" type="button">🔓 Unlock Private Memories</button>
 </div>
 </div>
 
