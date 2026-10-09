@@ -505,7 +505,10 @@ function startCard(){
   S.CARD_STARTED=true;
   restartTypewriter();
   updateCounters();
-  startMusicFor('card');
+  // FIX 6b: card music starts ONLY if the admin selected at least one song for
+  // 'Card' (or 'Both'). Slideshow-only songs must never be heard here.
+  if(musicAllowedInCtx('card')) startMusicFor('card');
+  else { const a=$('audioPlayer'); if(a&&!a.paused)a.pause(); MUSIC_ON=false; }
 }
 function renderCardFull(){
   const t=S.CURR.texts||{},s=S.CURR.shared||{};
@@ -906,25 +909,24 @@ $('uploadSubmit').onclick=async()=>{
 };
 
 let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
+// FIX 6b: master context switch. Every background-music action (autoplay, toggle
+// button, slideshow engine) is gated through these two helpers so a song selected
+// for the card can NEVER be heard outside the card and vice-versa.
+function musicAllowedInCtx(ctx){ return buildPlaylistFor(ctx).length>0; }
+function musicGuard(ctx){ return musicAllowedInCtx(ctx); }
 function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
 
-// FIX 6: per-song 'where' is now the AUTHORITATIVE placement selector.
-// The song's own dropdown decides WHERE it plays, regardless of the global mode:
-//   song 'card'      -> card only        (even when mode = 'both' or 'slideshow')
-//   song 'slideshow' -> slideshow only   (even when mode = 'both' or 'card')
-//   song 'both'      -> follows the global mode (mode gates these songs only).
-// Global music_mode still acts as a master switch for 'both'-songs:
-//   mode 'card'      -> 'both'-songs play on card only, silent in slideshow
-//   mode 'slideshow' -> 'both'-songs play in slideshow only, silent on card
-//   mode 'both'      -> 'both'-songs play everywhere.
+// FIX 6b: per-song 'where' is the SOLE, AUTHORITATIVE placement selector.
+// Whatever the admin picks in the lock panel's "Play in" dropdown for a song is
+// exactly where that song plays — nowhere else:
+//   song 'card'      -> plays ONLY on the greeting card (never in the slideshow)
+//   song 'slideshow' -> plays ONLY inside the slideshow (never on the card)
+//   song 'both'      -> plays in both places
+// The legacy global 'music_mode' radio is intentionally NOT consulted any more,
+// so a saved value of music_mode can never make a song leak into another section.
 function songAllowedIn(s,i,ctx){
-  const mode=s.music_mode||'both';
   const w=s['song'+i+'_where']||'both';
-  if(w===ctx)return true;          // exact match: card->card, slideshow->slideshow
-  if(w==='both'){                   // 'both' songs obey the global mode
-    return mode==='both'||mode===ctx;
-  }
-  return false;                     // mismatched specific choice never leaks
+  return w==='both'||w===ctx;
 }
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
@@ -950,20 +952,34 @@ function buildPlaylistFor(ctx){
   return base;
 }
 function playNext(){
+  // FIX 6b: never continue/advance playback into a context where the admin
+  // hasn't selected a song for it (e.g. slideshow-only song must stay silent on card).
+  if(!musicGuard(CURR_CTX)){ stopMusicEverywhere(); return; }
   if(!CURR_LIST.length)return;
   CURR_IDX=(CURR_IDX+1)%CURR_LIST.length;
   const a=$('audioPlayer');
   a.src=CURR_LIST[CURR_IDX];a.volume=getVol(CURR_CTX);
   a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊'}).catch(()=>{MUSIC_ON=false;$('musicToggle').textContent='🔇'});
 }
+// FIX 6b: hard stop used whenever music is not allowed in the current context.
+function stopMusicEverywhere(){
+  const a=$('audioPlayer');
+  if(a&&!a.paused)a.pause();
+  MUSIC_ON=false;CURR_CTX='';CURR_LIST=[];CURR_IDX=-1;
+  SS_ownPlaylist=[];SS_ownIdx=-1;
+  const mt=$('musicToggle');if(mt)mt.textContent='🔇';
+}
 function startMusicFor(ctx){
   const list=buildPlaylistFor(ctx);
   $('musicToggle').classList.toggle('visible',list.length>0);
   if(!list.length){
-    if(CURR_CTX!==ctx){
+    // Nothing selected for this place -> make sure nothing plays here and
+    // stop anything that was leaking from another place.
+    if(CURR_CTX!==ctx||MUSIC_ON){
       const a=$('audioPlayer');
       if(a && !a.paused) a.pause();
       MUSIC_ON=false;
+      CURR_CTX=ctx;CURR_LIST=[];CURR_IDX=-1;
       $('musicToggle').textContent='🔇';
     }
     return;
@@ -971,9 +987,26 @@ function startMusicFor(ctx){
   if(CURR_CTX===ctx&&MUSIC_ON&&!$('audioPlayer').paused)return;
   CURR_CTX=ctx;CURR_LIST=list;CURR_IDX=-1;playNext();
 }
-$('audioPlayer').addEventListener('ended',()=>{if(MUSIC_ON)playNext()});
+$('audioPlayer').addEventListener('ended',()=>{
+  if(!MUSIC_ON)return;
+  // FIX 6b: track finished — advance within the playlist of the CURRENT place only.
+  if(SS_isOpen){
+    if(musicAllowedInCtx('slideshow')){ SS_nextTrackIfOwn(); if(!($('audioPlayer').src&&($('audioPlayer').currentSrc||'')))SS_ensureMusicPlaying(); }
+    else { $('audioPlayer').pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
+    return;
+  }
+  playNext();
+});
 $('musicToggle').onclick=()=>{
+  // FIX 6b: the toggle button only ever controls music of the CURRENT place.
+  // If no song is selected for this place, the button does nothing (no wrong-place audio).
+  const ctx=(SS_isOpen?'slideshow':CURR_CTX)||'card';
+  if(!musicGuard(ctx)){const mt=$('musicToggle');if(mt)mt.textContent='🔇';return;}
+  const list=(ctx==='slideshow'&&SS_ownPlaylist.length)?SS_ownPlaylist:buildPlaylistFor(ctx);
+  if(ctx==='slideshow'){CURR_CTX='slideshow';CURR_LIST=list;}
+  else if(CURR_CTX!=='card'){CURR_CTX='card';CURR_LIST=buildPlaylistFor('card');CURR_IDX=-1;}
   const a=$('audioPlayer');
+  if(!a.src&&CURR_LIST.length){a.src=CURR_LIST[0];a.volume=getVol(CURR_CTX);}
   if(MUSIC_ON&&!a.paused){a.pause();MUSIC_ON=false;$('musicToggle').textContent='🔇'}
   else{MUSIC_ON=true;a.play().catch(()=>{});$('musicToggle').textContent='🔊'}
 };
@@ -1168,26 +1201,33 @@ function SS_duckedMusicVol(){ return Math.max(0.05,SS_normalMusicVol()*0.35); }
 function SS_isMusicDuringVideo(){ return String((S.CURR.shared||{}).musicDuringVideo)==='true'; }
 function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'):SS_normalMusicVol(); }
 
-// FIXED (v2): SS_ensureMusicPlaying obeys the per-song 'where' selection as the
-// authoritative placement rule (see songAllowedIn / buildPlaylistFor):
-// - Songs chosen 'slideshow' or 'both' (when mode allows) play here.
-// - Songs chosen 'card' NEVER leak into the slideshow — even in mode 'both'.
+// FIXED (v3): SS_ensureMusicPlaying obeys the per-song 'where' selection as the
+// SOLE placement rule (see songAllowedIn / buildPlaylistFor):
+// - Songs chosen 'slideshow' or 'both' play here.
+// - Songs chosen 'card' NEVER leak into the slideshow — under any setting.
 // - If nothing is allowed in this context, audio pauses (no wrong-place playback).
 function SS_ensureMusicPlaying(){
   const a=$('audioPlayer');
   if(!a)return;
-  const ssList=buildPlaylistFor('slideshow');   // already filtered by mode+where
+  const ssList=buildPlaylistFor('slideshow');   // filtered by the per-song 'Play in' dropdown only
   const wantList=ssList;
   if(!wantList || !wantList.length){
     if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
   }
-  if(a.paused || !a.src){
+  const curSrc=a.currentSrc||a.src||'';
+  if(!a.paused && curSrc && !wantList.includes(curSrc)){
+    // A track from another place (e.g. card-only song) is playing inside the
+    // slideshow -> stop it and load the correct slideshow playlist instead.
+    a.pause();
+  }
+  if(a.paused || !a.src || !wantList.includes(a.currentSrc||a.src||'')){
     SS_ownPlaylist=wantList;
     SS_ownIdx=0;
     a.src=wantList[0];
     a.loop=false;
-    a.volume=getVol(ssList.length?'slideshow':'card');
+    a.volume=getVol('slideshow');
+    CURR_CTX='slideshow';CURR_LIST=wantList;CURR_IDX=0;
     a.play().then(()=>{
       MUSIC_ON=true;
       $('musicToggle').textContent='🔊';
@@ -1561,7 +1601,8 @@ function SS_updateSlide(){
     } else if(a.paused || !a.src){
       // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
       const curSrc=a.currentSrc||a.src||'';
-      if(CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)){
+      const isOwn=(SS_ownPlaylist.length&&SS_ownPlaylist.includes(curSrc));
+      if((CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)) || isOwn){
         a.volume=getVol('slideshow');
         a.play().catch(()=>{});
         MUSIC_ON=true;
@@ -1572,7 +1613,15 @@ function SS_updateSlide(){
         SS_ensureMusicPlaying();
       }
     } else {
-      a.volume=getVol('slideshow');
+      // FIX 6b: audio is playing while a slideshow slide is shown — verify the loaded
+      // track really belongs to the slideshow playlist; otherwise swap/pause so that
+      // card-only songs can never be heard inside the slideshow.
+      const curSrc=a.currentSrc||a.src||'';
+      if(!ssList.includes(curSrc)){
+        SS_ensureMusicPlaying();
+      } else {
+        a.volume=getVol('slideshow');
+      }
     }
     if(SS_musicDucked!==false){
       SS_fadeMusic(SS_musicTargetVol(),300);
@@ -1645,6 +1694,10 @@ function SS_close(){
   SS_ownPlaylist=[];SS_ownIdx=-1;
   const a=$('audioPlayer');
   if(a){ a.volume=getVol('card'); }
+  // FIX 6b: when the slideshow closes, ONLY card-selected songs may resume.
+  // startMusicFor('card') rebuilds the playlist from buildPlaylistFor('card'),
+  // so slideshow-only tracks can never leak back onto the card. If no song is
+  // selected for the card, everything is stopped/paused here.
   if(typeof startMusicFor==='function')startMusicFor('card');
   if(!S.PREVIEW_MODE&&S.CURRENT_PERSON)openClosingModal();
 }
@@ -1690,7 +1743,14 @@ document.addEventListener('visibilitychange',()=>{
     const a=$('audioPlayer');if(a)a.pause();
   }else if(SS_isOpen){
     const a=$('audioPlayer');
-    if(a&&a.src){a.play().catch(()=>{});}
+    // FIX 6b: resume ONLY slideshow-selected songs, and only if the track that is
+    // loaded actually belongs to the slideshow playlist (never a card-only song).
+    if(a&&a.src&&musicAllowedInCtx('slideshow')){
+      const curSrc=a.currentSrc||a.src||'';
+      const ssList=buildPlaylistFor('slideshow');
+      if(ssList.includes(curSrc)){ a.volume=getVol('slideshow'); a.play().catch(()=>{}); }
+      else { SS_ensureMusicPlaying(); }
+    }
     const cur = SS[SS_IDX];
     if(cur && cur.type !== 'video'){
       if(!SS_T){
