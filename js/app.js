@@ -160,7 +160,7 @@ function getEditPasswordForPerson(p){
   if(!p)return '';
   return makeRequesterEditPassword(p.requester_name||'',p.requester_whatsapp||'',p.slug||'');
 }
-// Private-media OTP: deterministic 6-digit code derived from the Requester's edit password.
+// Private-media OTP: deterministic 6-digit code derived from the Requester's Edit Key.
 // Generated ONLY in the Requester Portal (when requester name + WhatsApp + slug are filled) and shared with the couple.
 function makePrivateOtp(editPw){
   const s=String(editPw||'');
@@ -384,7 +384,7 @@ function hasReviewFor(slug){
 function onPersonClick(p){
   S.LOGIN_TARGET=p;
   txt($('personLoginTitle'),'Hi '+(p.display_name||p.slug||'')+' 💕');
-  txt($('personLoginSub'),'Enter your card password, or requester edit password.');
+  txt($('personLoginSub'),"Enter your View Key, or the requester's Edit Key.");
   $('personPwError').classList.remove('show');$('personPwInput').value='';
   show($('personLoginModal'));setTimeout(()=>$('personPwInput').focus(),150);
 }
@@ -1432,7 +1432,7 @@ $('openBtn').onclick=async()=>{
 $('privateBtn').onclick=async()=>{
   if(!S.CURRENT_PERSON){alert('No person selected.');return}
   // 🔒 Private media is OTP-protected. The 6-digit OTP is generated ONLY in the Requester Portal
-  // (derived from the Requester EDIT password created when requester name + WhatsApp were added).
+  // (derived from the Edit Key created when requester name + WhatsApp were added).
   const privOtp=getPrivateOtpForPerson(S.CURRENT_PERSON);
   if(!privOtp){alert('🔒 Private memories are locked. An OTP must be generated in the Requester Portal first (requires Requester name + WhatsApp).');return}
   const unlocked=(()=>{try{return sessionStorage.getItem('priv_unlocked_'+(S.CURRENT_PERSON.slug||S.CURRENT_PERSON.id))==='1'}catch(e){return false}})();
@@ -2138,16 +2138,16 @@ function renderPeopleRepeater(){
         <div class="panel-field" style="margin-top:.7rem;"><label class="panel-label">Display Name</label><input type="text" class="panel-input" data-pp="display_name" data-i="${i}" value="${(p.display_name||'').replace(/"/g,'&quot;')}"></div>
         <div class="panel-field"><label class="panel-label">Login ID / Slug</label><input type="text" class="panel-input" data-pp="slug" data-i="${i}" value="${(p.slug||'').replace(/"/g,'&quot;')}"></div>
         <div class="panel-field"><label class="panel-label">Birthday</label><input type="date" class="panel-input" data-pp="birthday" data-i="${i}" value="${(p.birthday||'').slice(0,10)}"></div>
-        <div class="panel-field"><label class="panel-label">Card Password (viewer)</label><input type="text" class="panel-input" data-pp="password" data-i="${i}" value="${(p.password||'').replace(/"/g,'&quot;')}"></div>
+        <div class="panel-field"><label class="panel-label">View Key</label><input type="text" class="panel-input" data-pp="password" data-i="${i}" value="${(p.password||'').replace(/"/g,'&quot;')}"></div>
         <div class="panel-field"><label class="panel-label">Requester name (shown on reviews)</label><input type="text" class="panel-input" data-pp="requester_name" data-i="${i}" value="${(p.requester_name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Deep Patel"></div>
-        <div class="panel-field"><label class="panel-label">Requester WhatsApp (used for edit password)</label><input type="tel" class="panel-input" data-pp="requester_whatsapp" data-i="${i}" value="${(p.requester_whatsapp||'').replace(/"/g,'&quot;')}" placeholder="e.g. +971 55 348 8512"></div>
+        <div class="panel-field"><label class="panel-label">Requester WhatsApp (used for Edit Key)</label><input type="tel" class="panel-input" data-pp="requester_whatsapp" data-i="${i}" value="${(p.requester_whatsapp||'').replace(/"/g,'&quot;')}" placeholder="e.g. +971 55 348 8512"></div>
         <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
-          <label class="panel-label" style="color:#1a3d8f;">✏️ Requester EDIT password (auto)</label>
+          <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
           <input type="text" class="panel-input" data-pp="editpw_readonly" data-i="${i}" readonly value="${editPw||''}" style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
           <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Format: {FirstName}-EDIT-{last4digits}-{slug}</div>
           <label class="panel-label" style="color:#0d5c4a;margin-top:.5rem;display:block;">🔒 Private Media OTP (auto — required to open the private slideshow)</label>
           <input type="text" class="panel-input" data-pp="otp_readonly" data-i="${i}" readonly value="${getPrivateOtpForPerson(p)||''}" style="background:#e9f7f1;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
-          <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">6-digit code generated from the edit password. Share it with the couple so they can unlock “Open Our Private Memories”.</div>
+          <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">6-digit code generated from the Edit Key. Share it with the couple so they can unlock “Open Our Private Memories”.</div>
         </div>
         <div class="panel-field" style="padding:.5rem;background:#fff0f0;border:1px dashed #8b0028;border-radius:.6rem;">
           <label class="panel-label" style="color:#8b0028;">🗓️ Auto-wipe this person on (date + time + timezone)</label>
@@ -2321,9 +2321,9 @@ function openShareModal(person,guest){
     '<div style="background:#fffdf8;border:1px dashed rgba(196,30,58,.35);border-radius:.8rem;padding:.8rem;margin-bottom:.8rem;font-size:.88rem;line-height:1.7;">'
     +'<div style="font-weight:900;color:var(--c-primary);margin-bottom:.5rem;">🔑 Card credentials</div>'
     +'<div><strong>Login ID / Slug:</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.slug||'')+'</code></div>'
-    +'<div><strong>Card Password (viewer):</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.password||'(not set)')+'</code></div>'
-    +'<div><strong>Requester EDIT password:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw||'(add Requester name + WhatsApp)')+'</code></div>'
-    +'<div><strong>🔒 Private Media OTP (6-digit):</strong> <code style="background:#e9f7f1;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.15em;">'+esc(makePrivateOtp(editPw)||'(generated after edit password exists)')+'</code></div>'
+    +'<div><strong>View Key:</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.password||'(not set)')+'</code></div>'
+    +'<div><strong>Edit Key:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw||'(add Requester name + WhatsApp)')+'</code></div>'
+    +'<div><strong>🔒 Private Media OTP (6-digit):</strong> <code style="background:#e9f7f1;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.15em;">'+esc(makePrivateOtp(editPw)||'(generated after Edit Key exists)')+'</code></div>'
     +'<div style="margin-top:.5rem;"><strong>Card link:</strong> <a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">'+esc(link)+'</a></div>'
     +'</div>'
     +'<div style="background:linear-gradient(135deg,#e8f5f0,#d3ede1);border:2px solid #0d5c4a;border-radius:.8rem;padding:.8rem;margin-bottom:.8rem;font-size:.86rem;line-height:1.7;">'
@@ -2352,7 +2352,7 @@ function openShareModal(person,guest){
 $('shareModalClose').onclick=()=>hide($('shareModal'));
 function buildShareMessage(requesterName,person,link,editPw){
   const name=requesterName||'there';
-  return ['Hi '+name+' 💕','','Your surprise for *'+(person.display_name||person.slug)+'* is ready! 🎉','','🔑 Login ID: '+(person.slug||''),'🔒 Card Password (viewer): '+(person.password||''),'✏️ Requester EDIT password: '+(editPw||''),'🔐 Private Memories OTP (6-digit, needed to open the private slideshow): '+(makePrivateOtp(editPw)||''),'🌐 Open here: '+link,'','How to use:','• To VIEW the surprise → use the Card Password.','• To EDIT the card → use the Requester EDIT password (you will see an ✏️ Edit Card button).','• To open 📸 Private Memories → enter the 6-digit OTP when prompted.','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the Card Password (view) OR the Requester EDIT password (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
+  return ['Hi '+name+' 💕','','Your surprise for *'+(person.display_name||person.slug)+'* is ready! 🎉','','🔑 Login ID: '+(person.slug||''),'🔒 View Key: '+(person.password||''),'✏️ Edit Key: '+(editPw||''),'🔐 Private Memories OTP (6-digit, needed to open the private slideshow): '+(makePrivateOtp(editPw)||''),'🌐 Open here: '+link,'','How to use:','• To VIEW the surprise → use the View Key.','• To EDIT the card → use the Edit Key (you will see an ✏️ Edit Card button).','• To open 📸 Private Memories → enter the 6-digit OTP when prompted.','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the View Key (view) OR the Edit Key (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
 }
 
 async function openPersonDetails(p){
@@ -2361,7 +2361,7 @@ async function openPersonDetails(p){
   titleEl.textContent='👁️ #'+(p.id||'new')+' — '+(p.display_name||p.slug||'Person');
   const wipeDisplay=p.wipe_iso?(utcToZonedLocal(p.wipe_iso,p.wipe_iso_tz||DEFAULT_TZ).replace('T',' ')+' ('+(p.wipe_iso_tz||DEFAULT_TZ)+')'):'';
   const editPw=getEditPasswordForPerson(p);
-  subEl.textContent='Login ID: '+(p.slug||'—')+(p.birthday?' · Birthday: '+p.birthday:'')+' · Card PW: '+(p.password||'(not set)')+' · Edit PW: '+(editPw||'(missing requester info)')+(p.requester_name?' · Requester: '+p.requester_name:'')+(wipeDisplay?' · 🗓️ Wipes on: '+wipeDisplay:'');
+  subEl.textContent='Login ID: '+(p.slug||'—')+(p.birthday?' · Birthday: '+p.birthday:'')+' · View Key: '+(p.password||'(not set)')+' · Edit Key: '+(editPw||'(missing requester info)')+(p.requester_name?' · Requester: '+p.requester_name:'')+(wipeDisplay?' · 🗓️ Wipes on: '+wipeDisplay:'');
   bodyEl.innerHTML='<div style="padding:1rem;text-align:center;color:var(--c-text-muted);font-style:italic;">Loading…</div>';
   show($('personDetailsModal'));
   let set={},gifts=[],story=[],events=[],voice=[],video=[],pins=[],media=[],reviews=[];
@@ -2399,11 +2399,11 @@ async function openPersonDetails(p){
   const link=PUBLIC_CARD_LINK+(p.slug?('?person='+encodeURIComponent(p.slug)):'');
   h+='<div class="detail-block"><div class="detail-block-title">👤 Person</div>'
     + row('ID',p.id) + row('Display Name',p.display_name) + row('Login ID / Slug',p.slug)
-    + row('Birthday',p.birthday) + row('Card Password (viewer)',p.password||'(not set)')
+    + row('Birthday',p.birthday) + row('View Key',p.password||'(not set)')
     + row('Requester name',p.requester_name||'')
     + row('Requester WhatsApp',p.requester_whatsapp||'')
-    + row('✏️ Requester EDIT password',editPw||'(missing requester name/whatsapp)')
-    + row('🔒 Private Media OTP (6-digit)',makePrivateOtp(editPw)||'(generated after edit password exists)')
+    + row('✏️ Edit Key',editPw||'(missing requester name/whatsapp)')
+    + row('🔒 Private Media OTP (6-digit)',makePrivateOtp(editPw)||'(generated after Edit Key exists)')
     + row('🗓️ Wipe on',p.wipe_iso?(new Date(p.wipe_iso).toISOString()+' · '+utcToZonedLocal(p.wipe_iso,p.wipe_iso_tz||DEFAULT_TZ)+' '+(p.wipe_iso_tz||DEFAULT_TZ)):'')
     + row('Card link',link)
     + '</div>';
@@ -3145,8 +3145,8 @@ async function loadGuestHistory(){
       ${gi.note?'💬 '+esc(gi.note)+'<br>':''}
       <hr style="border:none;border-top:1px dashed rgba(196,30,58,.25);margin:.4rem 0;">
       <div><strong>🔑 Login ID:</strong> <code style="background:#fff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;">${esc(loginId)}</code></div>
-      ${pwd?'<div><strong>🔒 Card Password:</strong> <code style="background:#fff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;">'+esc(pwd)+'</code></div>':''}
-      ${editPw?'<div><strong>✏️ EDIT password:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw)+'</code></div>':''}
+      ${pwd?'<div><strong>🔒 View Key:</strong> <code style="background:#fff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;">'+esc(pwd)+'</code></div>':''}
+      ${editPw?'<div><strong>✏️ Edit Key:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw)+'</code></div>':''}
       <div><strong>🌐 Link:</strong> <a href="${link}" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">${link}</a></div>
     </div>
     <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;">
@@ -3415,7 +3415,7 @@ $('guestSubmit').onclick=async()=>{
     if(!r.ok){const t=await r.text();throw new Error('submit failed '+r.status+' '+t)}
     st.textContent='✅ Submitted!';st.className='panel-status ok';
     setTimeout(()=>{
-      if(confirm('Submitted!\n\nWe will WhatsApp you the Login ID + Card password + EDIT password once approved.\n\nSend us a WhatsApp message now to speed up the approval?')){
+      if(confirm('Submitted!\n\nWe will WhatsApp you the Login ID + View Key + Edit Key once approved.\n\nSend us a WhatsApp message now to speed up the approval?')){
         const msg='Hi Deep, I just submitted a request to add "'+newName+'". Please review and approve. Thank you!';
         window.open('https://wa.me/971553488512?text='+encodeURIComponent(msg),'_blank');
       }
