@@ -869,6 +869,8 @@ function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloa
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
   const s=S.CURR.shared||{};const mode=s.music_mode||'both';
+  // music_mode is the GLOBAL destination gate: 'card' => slideshow gets nothing,
+  // 'slideshow' => card gets nothing, 'both' => both contexts allowed.
   if(mode==='card'&&ctx==='slideshow')return[];
   if(mode==='slideshow'&&ctx==='card')return[];
   const base=[];
@@ -877,7 +879,18 @@ function buildPlaylistFor(ctx){
     const url=(s['song'+i+'_url']||'').trim();
     const w=s['song'+i+'_where']||'both';
     if(!on||!url)continue;
-    if(w==='both'||w===ctx)base.push(url);
+    // Per-song 'where' filter, corrected so mode+where combine properly:
+    // - song 'card': plays in card when mode is 'both' or 'card'; NEVER in slideshow.
+    // - song 'slideshow': plays in slideshow when mode is 'both' or 'slideshow'; NEVER in card.
+    // - song 'both': follows the global mode (allowed in whichever context mode permits).
+    if(ctx==='card'){
+      if(w==='slideshow')continue;
+      if(mode==='slideshow')continue; // already handled above, kept for clarity
+    }else{ // ctx==='slideshow'
+      if(w==='card')continue;
+      if(mode==='card')continue; // already handled above, kept for clarity
+    }
+    base.push(url);
   }
   if(String(s.shuffleMusicOn)!=='true')return base;
   const orderStr=(s.musicOrder||'').trim();
@@ -1108,21 +1121,29 @@ function SS_duckedMusicVol(){ return Math.max(0.05,SS_normalMusicVol()*0.35); }
 function SS_isMusicDuringVideo(){ return String((S.CURR.shared||{}).musicDuringVideo)==='true'; }
 function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'):SS_normalMusicVol(); }
 
-// FIX 4: music_mode='card' means no new playlist for slideshow
+// FIXED: SS_ensureMusicPlaying now strictly obeys music_mode + per-song 'where'.
+// - mode='card'      => slideshow must NOT play any music (pause card BGM too).
+// - mode='slideshow' => slideshow plays ONLY songs whose where is 'slideshow'/'both'.
+// - mode='both'      => slideshow plays the slideshow-context playlist; if it's empty,
+//                       fall back to card-context songs (so "Both" always has sound when enabled).
 function SS_ensureMusicPlaying(){
   const a=$('audioPlayer');
   if(!a)return;
   const mode=(S.CURR.shared||{}).music_mode||'both';
-  if(mode==='card'){ return; }
-  const ssList=buildPlaylistFor('slideshow');
-  const cardList=buildPlaylistFor('card');
-  let wantList;
-  if(mode==='slideshow'){
-    wantList=ssList;
-  }else{
-    wantList=(ssList && ssList.length) ? ssList : cardList;
+  // Global gate: Card-only mode means NO music inside the slideshow at all.
+  if(mode==='card'){
+    if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
+    return;
   }
-  if(!wantList || !wantList.length){ return; }
+  const ssList=buildPlaylistFor('slideshow');   // already filtered by mode+where
+  let wantList=ssList;
+  if(mode==='both' && (!wantList || !wantList.length)){
+    wantList=buildPlaylistFor('card');          // fallback so Both still plays something
+  }
+  if(!wantList || !wantList.length){
+    if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
+    return;
+  }
   if(a.paused || !a.src){
     SS_ownPlaylist=wantList;
     SS_ownIdx=0;
@@ -1493,18 +1514,25 @@ function SS_updateSlide(){
     const pb=$('slideshowProgress');
     if(pb){ pb.style.transition='none'; pb.style.width='0%'; }
   }else{
-    // FIX 4: skip resume logic when music_mode='card'
+    // FIXED: obey music_mode + per-song 'where' when resuming music on a non-video slide.
     const a=$('audioPlayer');
     const mode=(S.CURR.shared||{}).music_mode||'both';
-    if(a && mode!=='card'){
+    if(a && mode==='card'){
+      // Card-only mode: nothing should play inside the slideshow.
+      if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
+    } else if(a && mode!=='card'){
       if(a.paused || !a.src){
-        if(CURR_LIST.length){
-          a.volume=getVol(CURR_CTX==='slideshow'?'slideshow':'card');
+        const ssList=buildPlaylistFor('slideshow');
+        // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
+        const curSrc=a.currentSrc||a.src||'';
+        if(CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)){
+          a.volume=getVol('slideshow');
           a.play().catch(()=>{});
           MUSIC_ON=true;
           $('musicToggle').textContent='🔊';
           $('musicToggle').classList.add('visible');
         } else {
+          // Wrong context / card-only songs / empty -> rebuild correct slideshow playlist.
           SS_ensureMusicPlaying();
         }
       } else {
