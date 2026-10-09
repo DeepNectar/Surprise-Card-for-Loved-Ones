@@ -149,16 +149,55 @@ function firstNameOf(name){
   if(!n)return '';
   return n.split(/\s+/)[0].replace(/[^A-Za-z]/g,'')||'';
 }
-function makeRequesterEditPassword(requesterName,requesterWhatsapp,slug){
+// ✏️ Edit / Card Password — auto-generated greeting for the Requester EDIT password & Card Password.
+// Rules: max 8 letters, unique per person, deterministic (same inputs → same key), always uppercase.
+const PW_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no look-alike chars (no I/O/0/1)
+function editPwHash(s){
+  let h=2166136261>>>0;
+  for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}
+  return h>>>0;
+}
+function editPwFromSeed(seed){
+  // deterministic 8-char key derived from the seed (requester first name + last-4 WhatsApp digits + Login ID/slug)
+  let n=editPwHash(String(seed||''));
+  let out='';
+  for(let i=0;i<8;i++){out+=PW_ALPHABET.charAt(n%PW_ALPHABET.length);n=Math.floor(n/PW_ALPHABET.length)||editPwHash(out+i)}
+  return out;
+}
+function normalizeEditPw(v){
+  // legacy long-format keys ({FirstName}-EDIT-{last4}-{slug}) are upgraded to the new short 8-letter format
+  if(/^.*-EDIT-.*$/i.test(String(v||'')))return '';
+  return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
+}
+function makeRequesterEditPassword(requesterName,requesterWhatsapp,slug,stored){
+  const storedNorm=normalizeEditPw(stored);
+  if(storedNorm)return storedNorm; // keep the existing unique key stable across edits
   const fn=firstNameOf(requesterName);
   const l4=last4Digits(requesterWhatsapp);
   const sl=String(slug||'').toLowerCase().replace(/[^a-z0-9\-_]/g,'');
   if(!fn||!l4||!sl)return '';
-  return fn+'-EDIT-'+l4+'-'+sl;
+  return editPwFromSeed(fn.toUpperCase()+'|'+l4+'|'+sl); // max 8 letters, unique per person
 }
 function getEditPasswordForPerson(p){
   if(!p)return '';
-  return makeRequesterEditPassword(p.requester_name||'',p.requester_whatsapp||'',p.slug||'');
+  return makeRequesterEditPassword(p.requester_name||'',p.requester_whatsapp||'',p.slug||'',p.edit_password||'');
+}
+// Enforce uniqueness of an 8-letter auto key against all other people (deterministic collision suffix).
+function ensureUniqueEditPw(base,candidates,selfIdx){
+  const norm=String(base||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8);
+  if(!norm)return '';
+  let taken={};
+  (candidates||[]).forEach((p,i)=>{
+    if(selfIdx!=null&&i===selfIdx)return;
+    const k=getEditPasswordForPerson(p);
+    if(k)taken[k]=true;
+  });
+  if(!taken[norm])return norm;
+  for(let d=1;d<=999;d++){
+    const v=norm.slice(0,7)+String(d%10);
+    if(!taken[v])return v;
+  }
+  return norm;
 }
 // Private-media OTP: deterministic 6-digit code derived from the Requester's Edit Key.
 // Generated ONLY in the Requester Portal (when requester name + WhatsApp + slug are filled) and shared with the couple.
@@ -2144,7 +2183,7 @@ function renderPeopleRepeater(){
         <div class="panel-field" style="padding:.5rem;background:#eef3ff;border:1px dashed #1a3d8f;border-radius:.6rem;">
           <label class="panel-label" style="color:#1a3d8f;">✏️ Edit Key (auto)</label>
           <input type="text" class="panel-input" data-pp="editpw_readonly" data-i="${i}" readonly value="${editPw||''}" style="background:#f4f8ff;font-family:monospace;font-weight:800;color:#1a3d8f;">
-          <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Format: {FirstName}-EDIT-{last4digits}-{slug}</div>
+          <div style="font-size:.68rem;color:#1a3d8f;font-style:italic;margin-top:.25rem;">Auto greeting: unique, max 8 letters (e.g. K7QW2M4X). Same inputs always give the same key.</div>
           <label class="panel-label" style="color:#0d5c4a;margin-top:.5rem;display:block;">🔒 Private Media OTP (auto — required to open the private slideshow)</label>
           <input type="text" class="panel-input" data-pp="otp_readonly" data-i="${i}" readonly value="${getPrivateOtpForPerson(p)||''}" style="background:#e9f7f1;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.3em;text-align:center;" placeholder="(requires Requester name + WhatsApp + Slug)">
           <div style="font-size:.68rem;color:#0d5c4a;font-style:italic;margin-top:.25rem;">6-digit code generated from the Edit Key. Share it with the couple so they can unlock “Open Our Private Memories”.</div>
