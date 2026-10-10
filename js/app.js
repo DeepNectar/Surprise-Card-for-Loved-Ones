@@ -139,6 +139,19 @@ function dedupeMedia(rows){
   return out;
 }
 
+// Split a bulk-paste textarea value into Drive IDs and direct video URLs.
+// Drive ID = token without '/' (and not a URL). Direct link = full URL (kept as-is, may contain commas in query strings).
+function splitBulkMediaTokens(v){
+  const driveIds=[],urls=[];
+  String(v||'').split(/\s+/).forEach(tok=>{
+    tok=tok.trim().replace(/,+$/,'');
+    if(!tok)return;
+    if(/^(https?:\/\/|www\.)/i.test(tok)||tok.includes('/')) urls.push(tok);
+    else driveIds.push(tok.replace(/^,+|,+$| /g,''));
+  });
+  return {driveIds:driveIds.filter(Boolean),urls:urls};
+}
+
 function last4Digits(s){
   const digits=String(s||'').replace(/\D/g,'');
   if(digits.length<4)return digits.padStart(4,'0');
@@ -2921,22 +2934,24 @@ $('geAddPinRow').onclick=()=>{GE.pins.push({label:'',lat:'',lng:'',photo_drive_i
 function renderGEMedia(){ const w=$('geMediaRepeater');if(!w)return;w.innerHTML=''; GE.media.forEach((m,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{GE.media[+el.dataset.i][el.dataset.gm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.media.splice(+b.dataset.i,1);renderGEMedia()}}); }
 $('geAddMediaRow').onclick=()=>{GE.media.push({type:'photo',drive_id:'',src:'',title:''});renderGEMedia()};
 $('geBulkAddMedia').onclick=()=>{
-  const v=$('ge_bulkMediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('ge_bulkMediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   const before=GE.media.length;
   ids.forEach(id=>GE.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  GE.media=dedupeMedia(GE.media);const removed=(before+ids.length)-GE.media.length;
+  urls.forEach(u=>GE.media.push({type:'video',drive_id:'',src:u,title:''}));
+  GE.media=dedupeMedia(GE.media);const removed=(before+ids.length+urls.length)-GE.media.length;
   renderGEMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
 function renderGEPrivate(){ const w=$('gePrivateRepeater');if(!w)return;w.innerHTML=''; (GE.privateMedia||[]).forEach((m,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gpm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gpm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gpm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gpm="title" data-i="${i}" value="${stripPrivTitle(m.title).replace(/"/g,'&quot;')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{GE.privateMedia[+el.dataset.i][el.dataset.gpm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.privateMedia.splice(+b.dataset.i,1);renderGEPrivate()}}); }
 $('geAddPrivateRow').onclick=()=>{GE.privateMedia=GE.privateMedia||[];GE.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderGEPrivate()};
 $('geBulkAddPrivate').onclick=()=>{
-  const v=$('ge_bulkPrivateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('ge_bulkPrivateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   GE.privateMedia=GE.privateMedia||[];const before=GE.privateMedia.length;
   ids.forEach(id=>GE.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  GE.privateMedia=dedupeMedia(GE.privateMedia);const removed=(before+ids.length)-GE.privateMedia.length;
+  urls.forEach(u=>GE.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
+  GE.privateMedia=dedupeMedia(GE.privateMedia);const removed=(before+ids.length+urls.length)-GE.privateMedia.length;
   renderGEPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3357,11 +3372,12 @@ $('guestAddPinRow').onclick=()=>{G.pins.push({label:'',lat:'',lng:'',photo_drive
 function renderGuestMedia(){ const w=$('guestMediaRepeater');if(!w)return;w.innerHTML=''; (G.media||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{G.media[+el.dataset.i][el.dataset.gm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.media.splice(+b.dataset.i,1);renderGuestMedia()}}); }
 $('guestAddMediaRow').onclick=()=>{G.media=G.media||[];G.media.push({type:'photo',drive_id:'',src:'',title:''});renderGuestMedia()};
 $('guestBulkAddMedia').onclick=()=>{
-  const v=$('g_mediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('g_mediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   G.media=G.media||[];const before=G.media.length;
   ids.forEach(id=>G.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  G.media=dedupeMedia(G.media);const removed=(before+ids.length)-G.media.length;
+  urls.forEach(u=>G.media.push({type:'video',drive_id:'',src:u,title:''}));
+  G.media=dedupeMedia(G.media);const removed=(before+ids.length+urls.length)-G.media.length;
   renderGuestMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3448,11 +3464,12 @@ $('guestExcelInput').onchange=async(e)=>{
 function renderGuestPrivate(){ const w=$('guestPrivateRepeater');if(!w)return;w.innerHTML=''; (G.privateMedia||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gprm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gprm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gprm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gprm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{G.privateMedia[+el.dataset.i][el.dataset.gprm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.privateMedia.splice(+b.dataset.i,1);renderGuestPrivate()}}); }
 $('guestAddPrivateRow').onclick=()=>{G.privateMedia=G.privateMedia||[];G.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderGuestPrivate()};
 $('guestBulkAddPrivate').onclick=()=>{
-  const v=$('g_privateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('g_privateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   G.privateMedia=G.privateMedia||[];const before=G.privateMedia.length;
   ids.forEach(id=>G.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  G.privateMedia=dedupeMedia(G.privateMedia);const removed=(before+ids.length)-G.privateMedia.length;
+  urls.forEach(u=>G.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
+  G.privateMedia=dedupeMedia(G.privateMedia);const removed=(before+ids.length+urls.length)-G.privateMedia.length;
   renderGuestPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3569,11 +3586,12 @@ $('reAddPinRow').onclick=()=>{RE.pins.push({label:'',lat:'',lng:'',photo_drive_i
 function renderREMedia(){ const w=$('reMediaRepeater');if(!w)return;w.innerHTML=''; (RE.media||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-rm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-rm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-rm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{RE.media[+el.dataset.i][el.dataset.rm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.media.splice(+b.dataset.i,1);renderREMedia()}}); }
 $('reAddMediaRow').onclick=()=>{RE.media=RE.media||[];RE.media.push({type:'photo',drive_id:'',src:'',title:''});renderREMedia()};
 $('reBulkAddMedia').onclick=()=>{
-  const v=$('re_bulkMediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('re_bulkMediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   RE.media=RE.media||[];const before=RE.media.length;
   ids.forEach(id=>RE.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  RE.media=dedupeMedia(RE.media);const removed=(before+ids.length)-RE.media.length;
+  urls.forEach(u=>RE.media.push({type:'video',drive_id:'',src:u,title:''}));
+  RE.media=dedupeMedia(RE.media);const removed=(before+ids.length+urls.length)-RE.media.length;
   renderREMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3663,11 +3681,12 @@ $('viewerEditCardBtn').onclick=()=>openRequesterEditor();
 function renderREPrivate(){ const w=$('rePrivateRepeater');if(!w)return;w.innerHTML=''; (RE.privateMedia||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-rpm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-rpm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-rpm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rpm="title" data-i="${i}" value="${stripPrivTitle(m.title).replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{RE.privateMedia[+el.dataset.i][el.dataset.rpm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.privateMedia.splice(+b.dataset.i,1);renderREPrivate()}}); }
 $('reAddPrivateRow').onclick=()=>{RE.privateMedia=RE.privateMedia||[];RE.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderREPrivate()};
 $('reBulkAddPrivate').onclick=()=>{
-  const v=$('re_bulkPrivateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
-  if(!ids.length){__showToast('Paste at least one ID',false);return}
+  const v=$('re_bulkPrivateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
+  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
   RE.privateMedia=RE.privateMedia||[];const before=RE.privateMedia.length;
   ids.forEach(id=>RE.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  RE.privateMedia=dedupeMedia(RE.privateMedia);const removed=(before+ids.length)-RE.privateMedia.length;
+  urls.forEach(u=>RE.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
+  RE.privateMedia=dedupeMedia(RE.privateMedia);const removed=(before+ids.length+urls.length)-RE.privateMedia.length;
   renderREPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
