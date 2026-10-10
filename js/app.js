@@ -331,11 +331,20 @@ const sb={
     if(!r.ok){const t=await r.text();throw new Error('settings '+r.status+' '+t)}
     return r.json();
   },
-  async insBatch(table,rows){if(!rows||!rows.length)return;let body=rows;
+  async insBatch(table,rows){if(!rows||!rows.length)return;
+    // PostgREST requires every object in a batch array to have EXACTLY the same keys
+    // (otherwise 400 PGRST102 "All object keys must match"). Normalize all rows to a
+    // single shared key-set, filling missing keys with null before sending.
+    const norm=(rs)=>{const keys=new Set();rs.forEach(r=>Object.keys(r||{}).forEach(k=>keys.add(k)));return rs.map(r=>{const o={};keys.forEach(k=>{o[k]=(r&&Object.prototype.hasOwnProperty.call(r,k)&&r[k]!==undefined)?r[k]:null});return o})};
+    let body=norm(rows);
     // If the table lacks a `priv` column, fall back to encoding privacy in the title prefix so nothing is lost.
     try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:'POST',headers:this.h(),body:JSON.stringify(body)});if(r.ok)return r.json();
       const t=await r.text();
-      if(table===T_MEDIA&&/priv/.test(t)){body=rows.map(m=>{const c=Object.assign({},m);delete c.priv;if(m.priv===true||isPrivateRow(m))c.title=privTitle(stripPrivTitle(m.title));return c});const r2=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:'POST',headers:this.h(),body:JSON.stringify(body)});if(!r2.ok){const t2=await r2.text();throw new Error('batch insert '+table+' '+r2.status+' '+t2)}return r2.json()}
+      // Unknown-column errors from PostgREST (PGRST204 etc.) — retry without the offending key.
+      const colMatch=/Could not find the '(.*?)' column|invalid.*'([a-zA-Z_][a-zA-Z0-9_]*)'/.exec(t);
+      if(table===T_MEDIA&&(colMatch||/priv/.test(t))){body=norm(rows.map(m=>{const c=Object.assign({},m);delete c.priv;if(m.priv===true||isPrivateRow(m))c.title=privTitle(stripPrivTitle(m.title));return c}));const r2=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:'POST',headers:this.h(),body:JSON.stringify(body)});if(!r2.ok){const t2=await r2.text();throw new Error('batch insert '+table+' '+r2.status+' '+t2)}return r2.json()}
+      // PGRST102 safety-net: normalize keys and retry once even if we didn't anticipate the mismatch.
+      if(/PGRST102|All object keys must match/.test(t)){body=norm(rows);const r3=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:'POST',headers:this.h(),body:JSON.stringify(body)});if(!r3.ok){const t3=await r3.text();throw new Error('batch insert '+table+' '+r3.status+' '+t3)}return r3.json()}
       throw new Error('batch insert '+table+' '+r.status+' '+t);
     }catch(e){throw e instanceof Error&&/batch insert/.test(e.message)?e:new Error('batch insert '+table+': '+(e.message||'network'))}
   },
