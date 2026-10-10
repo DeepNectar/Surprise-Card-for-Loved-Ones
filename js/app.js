@@ -683,6 +683,9 @@ async function checkWipe(){
         finished_manually:false,wiped_at:p.wipe_iso}))finishedChanged=true;
     });
     try{ if(await syncFinishedFromCloud())finishedChanged=true; }catch(e){}
+    // 🆕 credential isolation: keep the global admin password/slug fresh (it is stored on the
+    // GLOBAL settings row, not the per-person row) so every login gate checks against it.
+    try{ const _g=await sb.getSet(null); if(_g){ S.GLOBAL_SHARED=_g; } }catch(e){}
     if(finishedChanged){ try{ await pullFinishedLedger(); }catch(e){} } // propagate to all devices/domains
     if(window.buildHome)window.buildHome();                              // repaints 💐 Finished section too
     if(window.updateFinishedBadge)updateFinishedBadge();
@@ -1054,17 +1057,70 @@ $('personPwCancel').onclick=()=>hide($('personLoginModal'));
 $('personPwInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();tryPersonPw()}});
 $('personPwConfirm').onclick=tryPersonPw;
 
+/* ── 🔐 Credential isolation (security fix) ───────────────────────────────
+   RULE: a key only ever unlocks ITS OWN card/slug. Nothing cross-opens:
+   • A View Key or Edit Key typed into ANOTHER person's login box → rejected.
+   • The ADMIN password never opens any person's card panel — it only works
+     through the dedicated Admin Access modal (cake ×3 → admin slug), and even
+     there only when the admin slug matches too.
+   • Only this person's own View Key / Edit Key opens this person's card. */
+function normKey(v){ return String(v==null?'':v).trim().toLowerCase(); }
+function getGlobalAdminPw(){
+  let pw='';
+  try{ const ls=localStorage.getItem('shared__adminPassword'); if(ls){ try{const o=JSON.parse(ls);pw=(o&&typeof o==='object')?(o.value||o.v||''):String(o);}catch(_){pw=String(ls);} } }catch(e){}
+  const gs=S.GLOBAL_SHARED||{};
+  return pw||gs['shared__adminPassword']||(S.CURR&&S.CURR.shared&&S.CURR.shared.adminPassword)||FALLBACK_ADMIN_PW;
+}
+// Admin password(s) — the stored one + the legacy fallback. Used ONLY to BLOCK these
+// keys from opening person card/viewer/edit panels (credential isolation). Never used
+// as a grant inside a person's login.
+function adminPwsSet(){
+  const s={};
+  [getGlobalAdminPw(),FALLBACK_ADMIN_PW].forEach(v=>{const n=normKey(v);if(n)s[n]=true});
+  return s;
+}
+function isAdminPw(pw){ const n=normKey(pw); return !!n && adminPwsSet()[n]===true; }
+// Per-card "key belongs to this card" checks — deliberately NOT accepting the admin password here.
+function personOwnsViewKey(p,pw){
+  const n=normKey(pw); if(!n) return false;
+  const stored=normalizeViewPw(p.password)||String(p.password||'');
+  if(stored && normKey(stored)===n) return true;                    // exact / case-insensitive match of THIS card's key
+  return makeViewerPassword(p.display_name,p.birthday,p.slug,p.password)===makeViewerPassword(p.display_name,p.birthday,p.slug,n); // derived-key match
+}
+function personOwnsEditKey(p,pw){
+  const n=normKey(pw); if(!n) return false;
+  const k=getEditPasswordForPerson(p);
+  if(k && normKey(k)===n) return true;
+  return makeRequesterEditPassword(p.requester_name,p.requester_whatsapp,p.slug,n)===getEditPasswordForPerson(p);
+}
+// Cross-card guard: reject a key that actually belongs to ANOTHER person's card
+// (e.g., a leaked global adminPassword equal to someone's key, or a mislabelled key).
+function keyBelongsToOtherPerson(p,pw){
+  const n=normKey(pw); if(!n) return false;
+  return (S.PEOPLE||[]).some(function(x){
+    if(!x||x.id===p.id) return false;
+    return personOwnsViewKey(x,n)||personOwnsEditKey(x,n);
+  });
+}
 async function tryPersonPw(){
   const pw=$('personPwInput').value;const p=S.LOGIN_TARGET;if(!p)return;
-  const adminPw=(S.CURR.shared&&S.CURR.shared.adminPassword)||FALLBACK_ADMIN_PW;
-  if(pw===adminPw||pw===FALLBACK_ADMIN_PW){hide($('personLoginModal'));await window.startAdmin();return}
+  // ⛔ The admin password NEVER opens a person's card — admin access is only
+  // via the Admin Access modal (triple-tap the cake + admin slug).
+  if(isAdminPw(pw)){
+    $('personPwError').textContent='⛔ That key is reserved for the Admin panel — it cannot open this card.';
+    $('personPwError').classList.add('show');$('personPwInput').value='';return;
+  }
   const editPw=getEditPasswordForPerson(p);
-  const isRequester = editPw && pw===editPw;
+  const isRequester = !!editPw && normKey(pw)===normKey(editPw);
   // View Keys are stored as short unique 8-char keys (same rules as Edit Keys).
-  // Legacy long-format keys still work for existing people until they are re-saved.
+  // Strict match against THIS card's key only — never a raw cross-panel fallback.
   const expected=normalizeViewPw(p.password)||String(p.password||'');
   const entered=String(pw||'');
   const isViewer = expected ? (entered===expected || entered.toUpperCase()===expected) : false;
+  if((isRequester||isViewer) && keyBelongsToOtherPerson(p,entered)){
+    $('personPwError').textContent='⛔ This key belongs to another card — it cannot be used here.';
+    $('personPwError').classList.add('show');$('personPwInput').value='';return;
+  }
   if(!isRequester && !isViewer){
     $('personPwError').textContent=getText('pwError','❌ Incorrect password.');
     $('personPwError').classList.add('show');return;
@@ -1749,19 +1805,46 @@ function applyLangFull(){
   if($('viewerScreen').classList.contains('active'))renderCardFull();
 }
 
+/* ── 🔑 Admin Access = password + admin slug (both must match) ─────────────
+   Triple-tapping the 🎂 cake opens this modal. It now asks for the admin
+   slug (Login ID) AND the admin password — the panel opens ONLY when BOTH
+   match. The admin password alone never opens anything, and it can never
+   open a person's card/viewer/edit panel either. */
+const ADMIN_SLUG_SETTING='shared__admin_slug';
+const DEFAULT_ADMIN_SLUG='cake';
+function getAdminSlug(){
+  let s='';
+  try{ const ls=localStorage.getItem(ADMIN_SLUG_SETTING); if(ls){ try{const o=JSON.parse(ls);s=(o&&typeof o==='object')?(o.value||o.v||''):String(o);}catch(_){s=String(ls);} } }catch(e){}
+  const gs=S.GLOBAL_SHARED||{};
+  s=s||gs[ADMIN_SLUG_SETTING]||(S.CURR&&S.CURR.shared&&S.CURR.shared.adminSlug)||'';
+  return normKey(s)||DEFAULT_ADMIN_SLUG;
+}
 function openAdminLoginFull(){
   $('adminPwError').classList.remove('show');$('adminPwInput').value='';
-  show($('adminLoginModal'));setTimeout(()=>$('adminPwInput').focus(),150);
+  const se=$('adminSlugInput'); if(se)se.value='';
+  show($('adminLoginModal'));setTimeout(()=>{const el=se&&se.value===''?se:$('adminPwInput');if(el)el.focus()},150);
 }
 window.openAdminLogin=openAdminLoginFull;
 $('adminPwCancel').onclick=()=>hide($('adminLoginModal'));
 $('adminPwConfirm').onclick=tryAdminFull;
 $('adminPwInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();tryAdminFull()}});
+const _aslug=$('adminSlugInput');
+if(_aslug)_aslug.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();tryAdminFull()}});
 async function tryAdminFull(){
   const pw=$('adminPwInput').value;
-  const exp=(S.CURR.shared&&S.CURR.shared.adminPassword)||FALLBACK_ADMIN_PW;
-  if(pw===exp||pw===FALLBACK_ADMIN_PW){hide($('adminLoginModal'));await window.startAdmin()}
-  else{$('adminPwError').classList.add('show');$('adminPwInput').value=''}
+  const slugIn=normKey(($('adminSlugInput')||{}).value||'');
+  const errEl=$('adminPwError');
+  // 1️⃣ The admin slug MUST match first — without it the password is never even checked.
+  if(!slugIn || slugIn!==getAdminSlug()){
+    errEl.textContent='❌ Incorrect admin slug.';errEl.classList.add('show');
+    if(_aslug)_aslug.value='';return;
+  }
+  // 2️⃣ Password must match the stored admin password (no hardcoded fallback bypass).
+  const exp=normKey(getGlobalAdminPw());
+  if(!exp || normKey(pw)!==exp){
+    errEl.textContent='❌ Incorrect admin password.';errEl.classList.add('show');$('adminPwInput').value='';return;
+  }
+  hide($('adminLoginModal'));await window.startAdmin();
 }
 
 // FIX 2: legacy keys only apply to English
@@ -2752,7 +2835,8 @@ function fillAdminFields(){
   set('f_ct1_label2',sh.ct1_label||'');set('f_ct2_label2',sh.ct2_label||'');set('f_ct3_label2',sh.ct3_label||'');
   const cb=(id,v)=>{const el=$(id);if(el)el.checked=(String(v)!=='false')};
   cb('f_ct1_show',sh.ct1_show);cb('f_ct2_show',sh.ct2_show);cb('f_ct3_show',sh.ct3_show);
-  set('f_adminPassword',sh.adminPassword||FALLBACK_ADMIN_PW);
+  set('f_adminPassword',sh.adminPassword||'');
+  set('f_adminSlug',sh.adminSlug||getAdminSlug());
   const dl=$('f_defaultLang');if(dl)dl.value=sh.defaultLang||'en';
   const tgl=(id,v)=>{const el=$(id);if(el)el.checked=(v==='true')};
   tgl('f_enableFireworks',sh.enableFireworks);tgl('f_enableGiftBox',sh.enableGiftBox);
@@ -2802,6 +2886,7 @@ function readAdminFields(){
   sh.ct2_show=(($('f_ct2_show')||{}).checked)?'true':'false';
   sh.ct3_show=(($('f_ct3_show')||{}).checked)?'true':'false';
   sh.adminPassword=g('f_adminPassword')||FALLBACK_ADMIN_PW;
+  sh.adminSlug=(normKey(g('f_adminSlug'))||DEFAULT_ADMIN_SLUG);
   const tgl=id=>{const el=$(id);return el&&el.checked?'true':'false'};
   sh.enableFireworks=tgl('f_enableFireworks');sh.enableGiftBox=tgl('f_enableGiftBox');
   sh.enableVoiceMsg=tgl('f_enableVoiceMsg');sh.enableVideoMsg=tgl('f_enableVideoMsg');
@@ -5073,7 +5158,8 @@ async function boot(){
   try{ await pullFinishedLedger(); }catch(e){}
   S.PEOPLE=await sb.people()||[];
   const gs=await sb.getSet(null);
-  S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled'])};
+  S.GLOBAL_SHARED=gs||{}; // 🆕 credential isolation: global admin password/slug available to every login gate
+  S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled']),adminSlug:(gs&&gs['shared__admin_slug'])||DEFAULT_ADMIN_SLUG};
   // 🆕 HD1.3: pull the shared version + What's New history from the cloud after first paint.
   try{ await pullWhatsNew(); }catch(e){}
   if(window.buildHome)window.buildHome();

@@ -182,7 +182,8 @@
 <div class="pw-content">
 <div class="pw-icon">⚙️</div>
 <div class="pw-title">Admin Access</div>
-<div class="pw-sub">Enter the admin password.</div>
+<div class="pw-sub">Enter the admin slug and the admin password. Both must match.</div>
+<input type="text" class="pw-input" id="adminSlugInput" placeholder="Admin slug (Login ID)" autocomplete="off" autocapitalize="none" spellcheck="false">
 <input type="password" class="pw-input" id="adminPwInput" placeholder="Admin password">
 <div class="pw-error" id="adminPwError">❌ Incorrect password.</div>
 <div class="pw-buttons">
@@ -868,9 +869,10 @@
     </div>
   </div>
   <div class="panel-section">
-    <div class="panel-section-title">🔑 Admin Password</div>
+    <div class="panel-section-title">🔑 Admin Password &amp; Admin Slug</div>
+    <div class="panel-field"><label class="panel-label">Admin slug (Login ID — required with the password)</label><input type="text" class="panel-input" id="f_adminSlug"></div>
     <div class="panel-field"><label class="panel-label">Current admin password</label><input type="text" class="panel-input" id="f_adminPassword"></div>
-    <div class="panel-field" style="font-size:.75rem;color:var(--c-text-muted);font-style:italic;">Fallback password <code>Deepnectar@@1617@@</code> always works.</div>
+    <div class="panel-field" style="font-size:.75rem;color:var(--c-text-muted);font-style:italic;">🔒 Admin access needs BOTH the admin slug and the password to match. The admin password never opens any person's card, viewer or edit panel.</div>
   </div>
   <div class="panel-section">
     <div class="panel-section-title">⚠️ Danger Zone</div>
