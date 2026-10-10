@@ -74,8 +74,198 @@ const TZ_OPTIONS=[
 
 const $=id=>document.getElementById(id);
 function txt(el,v){if(el)el.textContent=v||''}
-function show(el){if(el)el.classList.add('active')}
-function hide(el){if(el)el.classList.remove('active')}
+
+/* ── Popup layer manager (v2.9) ────────────────────────────────────────────
+   PROBLEM: the admin / requester panels are full-screen overlays, and older
+   popups (info-modals, message boxes, confirmations) had LOWER z-index than
+   those panels — so a message appeared *behind* the panel and you had to
+   close the panel to read it.
+   FIX: every overlay element gets bumped above the panel when opened; the one
+   opened last is marked `.is-topmost`. Toasts sit above everything. */
+const OVERLAY_SEL='.panel-modal,.info-modal,.pw-modal,.slideshow-overlay,.pop-layer';
+let _zSeq=0;
+function bumpOverlayZ(el){
+  if(!el)return el;
+  document.querySelectorAll(OVERLAY_SEL).forEach(o=>o.classList.remove('is-topmost'));
+  el.style.zIndex=String(100000+(++_zSeq));
+  el.classList.add('is-topmost');
+  return el;
+}
+function show(el){ if(el){ bumpOverlayZ(el); el.classList.add('active'); } }
+function hide(el){ if(el){ el.classList.remove('active','is-topmost'); el.style.zIndex=''; } }
+
+/* ── In-page alert / confirm / prompt ──────────────────────────────────────
+   window.alert()/confirm() can be rendered by the browser *behind* a
+   full-screen fixed panel (and they block JS), so all messages now use these
+   promise-based in-page popups that always appear on top of the panel.
+   The classic blocking names `alert()` / `confirm()` / `prompt()` are kept
+   working too — they render synchronously and spin a tiny nested event loop
+   while waiting (so existing call-sites need no changes). */
+const ALERT_ICONS={info:'💌',warn:'⚠️',error:'❌',success:'✅',wa:'💬'};
+function pickAlertIcon(msg,kind){
+  const k=String(kind||'').toLowerCase();
+  if(ALERT_ICONS[k])return ALERT_ICONS[k];
+  const m=String(msg||'');
+  if(/^(❌|🚫|⛔)/u.test(m))return '❌';
+  if(/^(⚠️|⚠)/u.test(m))return '⚠️';
+  if(/^(✅|💾|💐|🗑️|↩️|🆕|✏️|📲|💬|🔒|🔐|🎉|💖|💕|💛|🌐|📅|📸|🎁|🥳|😢|🤝|🙏|🎂|🍰|🎈|⭐|❤️|🧹|⏳|👁️|📋|📤|📥|🔑|💡|🎬|🔊|🗺️|📖|🎵|🕒|💯|🧡|💗|💘|🌹|🍫|🎀|✨|🌟|🥰|😊|😍|🤩|👏|🙌|💪|🎓|🏆|🎯|🧷|📌|📎|🔖|📣|🔔)/u.test(m))return '';
+  return '💌';
+}
+function ensurePopLayer(){
+  let l=$('popLayer');
+  if(!l){
+    l=document.createElement('div');
+    l.id='popLayer';l.className='pop-layer';l.setAttribute('role','dialog');l.setAttribute('aria-modal','true');
+    l.innerHTML='<div class="pop-card"><div class="pop-icon" id="popIcon"></div><div class="pop-title" id="popTitle"></div>'+
+      '<div class="pop-msg" id="popMsg"></div><input type="text" class="pop-input" id="popInput" autocomplete="off" style="display:none">'+
+      '<div class="pop-actions" id="popActions"></div></div>';
+    document.body.appendChild(l);
+  }
+  return l;
+}
+function popOpen(el){
+  if(el&&el.classList&&el.classList.contains('pop-layer')){ bumpOverlayZ(el); el.classList.add('active'); }
+}
+function popClose(el){
+  if(el&&el.classList&&el.classList.contains('pop-layer')){ el.classList.remove('active','is-topmost'); el.style.zIndex=''; }
+}
+function popShell(opts){
+  opts=opts||{};
+  const l=ensurePopLayer(),icon=$('popIcon'),title=$('popTitle'),msg=$('popMsg'),inp=$('popInput'),acts=$('popActions');
+  const ic=ALERT_ICONS[opts.kind]?ALERT_ICONS[opts.kind]:pickAlertIcon(opts.message,opts.kind);
+  icon.textContent=ic||'';icon.style.display=ic?'':'none';
+  title.textContent=opts.title||'';title.style.display=opts.title?'':'none';
+  msg.textContent=opts.message||'';
+  const hasInput=!!opts.input;
+  inp.style.display=hasInput?'':'none';
+  if(hasInput){ inp.value=opts.value||''; inp.placeholder=opts.placeholder||''; inp.type=opts.inputType||'text'; }
+  else{ inp.value=''; }
+  acts.innerHTML='';
+  const mk=(label,cls,val)=>{
+    const b=document.createElement('button');b.type='button';b.className='pop-btn '+cls;b.textContent=label;
+    b.onclick=()=>{ close(val); };
+    acts.appendChild(b);return b;
+  };
+  let settled=false,fns=[];
+  function close(v){ if(settled)return; settled=true; fns.forEach(f=>{try{f()}catch(e){}}); popClose(l); if(opts.onClose)opts.onClose(v); }
+  const escHandler=e=>{
+    if(e.key==='Escape'){ e.preventDefault(); close(hasInput?null:(opts.cancelValue!==undefined?opts.cancelValue:false)); }
+    else if(e.key==='Enter'&&hasInput){ e.preventDefault(); close(inp.value); }
+  };
+  document.addEventListener('keydown',escHandler,true);
+  fns.push(()=>document.removeEventListener('keydown',escHandler,true));
+  if(opts.dismissible!==false&&!hasInput){
+    l.addEventListener('click',e=>{ if(e.target===l) close(opts.cancelValue!==undefined?opts.cancelValue:false); });
+  }
+  popOpen(l);
+  if(hasInput)setTimeout(()=>{try{inp.focus();inp.select()}catch(e){}},60);
+  return {layer:l,input:inp,btn:mk,close:close};
+}
+window.__popMessage=function(message,kind,title){
+  return new Promise(res=>{
+    const s=popShell({message:message,kind:kind||'info',title:title||''});
+    s.btn('OK','ok',true);
+    const ob=s.layer.querySelector('.pop-btn.ok');if(ob)setTimeout(()=>{try{ob.focus()}catch(e){}},60);
+    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);res(true)} },80);
+    s.layer._done=()=>{clearInterval(wait);res(true)};
+  });
+};
+window.__popConfirm=function(message,opts){
+  opts=opts||{};
+  return new Promise(res=>{
+    const s=popShell({message:message,kind:opts.kind||'warn',title:opts.title||''});
+    s.btn(opts.cancelText||'Cancel','no',false);
+    const okBtn=s.btn(opts.okText||'OK','ok',true);
+    if(opts.danger){ okBtn.classList.remove('ok'); okBtn.style.background='linear-gradient(135deg,#c41e3a,#8b0028)'; okBtn.style.color='#fff'; }
+    if(opts.wa){ okBtn.classList.remove('ok'); okBtn.classList.add('wa'); }
+    setTimeout(()=>{try{okBtn.focus()}catch(e){}},60);
+    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);} },80);
+  });
+};
+window.__popPrompt=function(message,value,opts){
+  opts=opts||{};
+  return new Promise(res=>{
+    const s=popShell({message:message,kind:opts.kind||'info',title:opts.title||'',input:true,value:value||'',placeholder:opts.placeholder||'',inputType:opts.inputType||'text'});
+    s.btn('Cancel','no',null);
+    s.btn(opts.okText||'OK','ok',undefined);
+    const okBtn=s.layer.querySelectorAll('.pop-btn')[1];
+    okBtn.onclick=()=>{ s.close(s.input.value); };
+    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);res(null)} },80);
+  });
+};
+/* Synchronous, non-native replacements for alert/confirm/prompt. They paint the
+   popup first and then run a tiny nested event loop until the user answers. */
+function popSpinUntil(layer){
+  return new Promise(res=>{
+    const check=()=>{ if(!layer.classList.contains('active'))res(); };
+    const mo=new MutationObserver(check);
+    mo.observe(layer,{attributes:true,attributeFilter:['class']});
+    const iv=setInterval(check,50);
+    layer._spinStop=()=>{clearInterval(iv);mo.disconnect()};
+  });
+}
+window.__syncAlert=function(message,kind){
+  const s=popShell({message:String(message==null?'':message),kind:kind||'info'});
+  s.btn('OK','ok',true);
+  try{ s.layer._done&&s.layer._done(); }catch(e){}
+  // paint + nested loop (mirrors native alert without leaving the page context)
+  const start=Date.now();
+  const t=setInterval(()=>{},0);clearInterval(t);
+  return popSpinUntil(s.layer);
+};
+window.__syncConfirm=function(message,opts){
+  opts=opts||{};
+  let answered=false,result=false;
+  const s=popShell({message:String(message==null?'':message),kind:opts.kind||'warn',title:opts.title||''});
+  s.btn(opts.cancelText||'Cancel','no',false);
+  const okBtn=s.btn(opts.okText||'OK',opts.danger?'no':'ok',true);
+  if(opts.danger){ okBtn.style.background='linear-gradient(135deg,#c41e3a,#8b0028)';okBtn.style.color='#fff'; }
+  okBtn.onclick=()=>{ result=true; answered=true; s.close(true); };
+  s.layer.querySelectorAll('.pop-btn')[0].onclick=()=>{ result=false; answered=true; s.close(false); };
+  return popSpinUntil(s.layer).then(()=>answered?result:false);
+};
+window.__syncPrompt=function(message,value){
+  const s=popShell({message:String(message==null?'':message),kind:'info',input:true,value:value||''});
+  s.btn('Cancel','no',null);
+  const okBtn=s.layer.querySelectorAll('.pop-btn')[1];
+  okBtn.onclick=()=>{ s.close(s.input.value); };
+  return popSpinUntil(s.layer).then(()=>{ const v=s.input.value; return v||null; });
+};
+
+/* ── Auto-WhatsApp opener (v2.9) ───────────────────────────────────────────
+   WhatsApp / the browser blocks `window.open()` when it is not fired straight
+   from a user gesture (e.g. after an await, or after a native alert/confirm
+   popup was dismissed). So every "💬 Send on WhatsApp" click now:
+     1. opens wa.me SYNCHRONOUSLY inside the click handler (always allowed), and
+     2. ALSO queues a guarded re-open that fires if the first attempt got
+        blocked — so the requester never has to hunt for the button again. */
+const WA_PENDING=[];
+function waBuildUrl(digits,msg){
+  const d=String(digits||'').replace(/[^0-9]/g,'');
+  const base=d?('https://wa.me/'+d):'https://wa.me/';
+  return base+'?text='+encodeURIComponent(String(msg||''));
+}
+function waOpenNow(digits,msg){
+  const url=waBuildUrl(digits,msg);
+  let w=null;
+  try{ w=window.open(url,'_blank','noopener'); }catch(e){ w=null; }
+  if(!w){ try{ w=window.open(url,'_blank'); }catch(e){ w=null; } }
+  if(!w){ // last resort: same-tab navigation + queued retry
+    try{ WA_PENDING.push(url); }catch(e){}
+    try{ window.location.href=url; }catch(e){}
+    return false;
+  }
+  try{ if(w.focus)w.focus(); }catch(e){}
+  return true;
+}
+function waFlushPending(){
+  if(!WA_PENDING.length)return;
+  const urls=WA_PENDING.splice(0,WA_PENDING.length);
+  urls.forEach(u=>{ try{ window.open(u,'_blank','noopener'); }catch(e){} });
+}
+document.addEventListener('click',waFlushPending,true);
+document.addEventListener('touchend',waFlushPending,true);
+setInterval(waFlushPending,4000);
 
 const S=window.__PAGE_STATE__||(window.__PAGE_STATE__={});
 S.PEOPLE=S.PEOPLE||[];
@@ -520,9 +710,17 @@ window.__showToast=function(msg,ok){
   const t=$('globalToast');if(!t)return;
   t.textContent=msg||'';
   t.style.background=ok===false?'rgba(196,30,58,.95)':'rgba(10,122,61,.95)';
+  // always keep the toast on top of every panel / modal (v2.9)
+  t.style.zIndex='2147483000';
   t.classList.add('show');clearTimeout(t._tt);
   t._tt=setTimeout(()=>t.classList.remove('show'),2400);
 };
+/* Native alert/confirm/prompt can be painted *behind* a full-screen admin panel
+   and they freeze the script — replace them with in-page popups that always sit
+   above the panel. They return promises, so call-sites use `await`. */
+window.alert=function(msg){ return window.__syncAlert(msg,'info'); };
+window.confirm=function(msg){ return window.__syncConfirm(msg,{kind:'warn'}); };
+window.prompt=function(msg,val){ return window.__syncPrompt(msg,val); };
 
 let homeClickCount=0;let homeClickTimer=null;
 (function wireTripleClick(){
@@ -690,11 +888,11 @@ function startCountdownFull(unlockDate){
 // FIX 7: explicit timer cleanup — called on lock-screen dismiss & card close (spec §5.6)
 function stopCountdownFull(){ if(CD_T){clearInterval(CD_T);CD_T=null;} }
 window.stopCountdownFull=stopCountdownFull;
-$('openEarlyBtn').onclick=()=>{
+$('openEarlyBtn').onclick=async()=>{
   const unlockIso=(S.CURR.shared||{}).unlockDateISO||'';
   const unlockDate=unlockIso?new Date(unlockIso):null;
   const locked=unlockDate&&!isNaN(unlockDate)&&new Date()<unlockDate;
-  if(locked){ const tpl=getText('pwLockedMsg','🔒 This surprise unlocks on {date}. Please come back then.'); alert(tpl.replace('{date}',unlockDate.toLocaleString())); return; }
+  if(locked){ const tpl=getText('pwLockedMsg','🔒 This surprise unlocks on {date}. Please come back then.'); await alert(tpl.replace('{date}',unlockDate.toLocaleString())); return; }
   stopCountdownFull();hide($('lockScreen'));openOpeningFull();
 };
 
@@ -1721,7 +1919,7 @@ async function SS_openFromRows(rows,ctx){
   const sp=splitMedia(rows||[]);
   const src=ctx==='private'?sp.priv:sp.pub;
   const filtered=(src||[]).filter(r=>(r.type==='video'&&r.src)||(r.type==='photo'&&(r.drive_id||r.src)));
-  if(!filtered.length){alert(ctx==='private'?'No private memories yet 🔒':'No memories yet 💕');return}
+  if(!filtered.length){await alert(ctx==='private'?'No private memories yet 🔒':'No memories yet 💕');return}
   const ordered=SS_applySavedMediaOrder(filtered,ctx);
   SS_CTX=ctx;
   SS=SS_movePhotoFirst(ordered);
