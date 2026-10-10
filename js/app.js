@@ -1262,6 +1262,10 @@ async function showViewerFor(person,startNow){
   if(lt){lt.textContent=S.CURR_LANG==='en'?'EN':(S.CURR_LANG==='gu'?'ગુ':'हि');lt.dataset.state=S.CURR_LANG;}
   renderCardFull();
   if(startNow)startCard();
+  // v2.9 AREA GATE: the card is now appearing on screen — start ONLY the songs
+  // selected for 'Card'/'Both'. If none are selected, make sure nothing plays.
+  if(musicAllowedInCtx('card')) startMusicFor('card');
+  else { const a=$('audioPlayer'); if(a&&!a.paused)a.pause(); MUSIC_ON=false; }
   window.scrollTo(0,0);
 }
 window.__showViewerForPreview__=showViewerFor;
@@ -1674,6 +1678,50 @@ $('uploadSubmit').onclick=async()=>{
 };
 
 let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
+/* ── v2.9 AREA GATE (HD1.4) ────────────────────────────────────────────────
+   A selected song may play ONLY while its area is actually OPEN/appearing on
+   screen:
+     'card'      -> the greeting-card viewer (#viewerScreen active, no slideshow overlay open)
+     'slideshow' -> the OUR MEMORIES slideshow overlay is open
+     'private'   -> the PRIVATE MEMORIES slideshow overlay is open
+   When an area is not open (home screen, opening/cake screen, lock screen,
+   admin panel, story/map/upload modals, tab in background, or the card closed
+   behind the slideshow), that area's music must NOT play. currentMusicArea()
+   resolves the single visible area; every play/resume path checks it first. */
+function isHomeVisible(){ const h=$('homeScreen'); return !!h && !h.classList.contains('hidden'); }
+function isCardVisible(){ const v=$('viewerScreen'); return !!v && v.classList.contains('active') && !isHomeVisible(); }
+function currentMusicArea(){
+  if(document.hidden)return '';
+  // v2.9: whichever overlay was shown LAST is the area on top of the card.
+  try{ const top=document.querySelector(OVERLAY_SEL+'.active.is-topmost');
+    if(top){ return (top.id==='slideshowOverlay'&&SS_isOpen)?((SS_CTX==='private')?'private':'slideshow'):''; }
+  }catch(e){}
+  if(SS_isOpen){
+    if(!($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active')))return '';
+    return (SS_CTX==='private')?'private':'slideshow';
+  }
+  if(isCardVisible())return 'card';
+  return ''; // home / opening / lock / modals only -> no music area is open
+}
+// True when the given playlist context is the area currently on screen.
+function areaGateOk(ctx){ const a=currentMusicArea(); return !!a && a===ctx; }
+// Pause the shared audio element whenever the loaded track belongs to an area
+// that is no longer open/visible (e.g. card hidden behind the slideshow,
+// slideshow closed, back-to-home, tab switched). Safe to call often.
+function enforceAreaMusicGate(){
+  try{
+    const a=$('audioPlayer');
+    if(!a||a.paused||!a.src)return;
+    const cur=a.currentSrc||a.src||'';
+    const area=currentMusicArea();
+    const inOwn=(SS_ownPlaylist&&SS_ownPlaylist.length&&SS_ownPlaylist.includes(cur));
+    const inList=(CURR_LIST&&CURR_LIST.length&&CURR_LIST.includes(cur));
+    if((inOwn||inList)&&area!==CURR_CTX){
+      a.pause(); MUSIC_ON=false;
+      const mt=$('musicToggle'); if(mt)mt.textContent='🔇';
+    }
+  }catch(e){}
+}
 // FIX 6b: master context switch. Every background-music action (autoplay, toggle
 // button, slideshow engine) is gated through these two helpers so a song selected
 // for the card can NEVER be heard outside the card and vice-versa.
@@ -1772,6 +1820,9 @@ function buildPlaylistFor(ctx){
   return base;
 }
 function playNext(){
+  // v2.9 AREA GATE: if the area this playlist belongs to is not open on screen,
+  // nothing from it may play (home/opening/lock/modals/background tab = silence).
+  if(!areaGateOk(CURR_CTX)){ const a0=$('audioPlayer'); if(a0&&!a0.paused)a0.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; return; }
   // FIX 6b: never continue/advance playback into a context where the admin
   // hasn't selected a song for it (e.g. slideshow-only song must stay silent on card).
   if(!musicGuard(CURR_CTX)){ stopMusicEverywhere(); return; }
@@ -1790,6 +1841,13 @@ function stopMusicEverywhere(){
   const mt=$('musicToggle');if(mt)mt.textContent='🔇';
 }
 function startMusicFor(ctx){
+  // v2.9 AREA GATE: only ever start music for the area that is actually open now.
+  if(!areaGateOk(ctx)){
+    const ag=$('audioPlayer');
+    if(ag&&!ag.paused)ag.pause();
+    MUSIC_ON=false; $('musicToggle').textContent='🔇';
+    return;
+  }
   const list=buildPlaylistFor(ctx);
   $('musicToggle').classList.toggle('visible',list.length>0);
   if(!list.length){
@@ -1824,6 +1882,8 @@ $('musicToggle').onclick=()=>{
   // v2.8: while the PRIVATE memories slideshow is open, the toggle controls the
   // 'private' playlist so its own dedicated song plays/pauses here.
   const ctx=(SS_isOpen?SS_musicCtx():CURR_CTX)||'card';
+  // v2.9 AREA GATE: the toggle can only play a song whose area is open right now.
+  if(!areaGateOk(ctx)){const a0=$('audioPlayer');if(a0&&!a0.paused)a0.pause();MUSIC_ON=false;const mt0=$('musicToggle');if(mt0)mt0.textContent='🔇';return;}
   if(!musicGuard(ctx)){const mt=$('musicToggle');if(mt)mt.textContent='🔇';return;}
   const list=(ctx!=='card'&&buildPlaylistFor(ctx).length)?buildPlaylistFor(ctx):buildPlaylistFor('card');
   if(ctx==='slideshow'||ctx==='private'){CURR_CTX=ctx;CURR_LIST=list;CURR_IDX=-1;if(SS_ownPlaylist!==list){SS_ownPlaylist=list;SS_ownIdx=-1;}}
@@ -2063,6 +2123,16 @@ function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'
 function SS_ensureMusicPlaying(){
   const a=$('audioPlayer');
   if(!a)return;
+  // v2.9 AREA GATE: the slideshow/private area must actually be open on screen
+  // before any of its songs may start. If it isn't, pause instead of playing.
+  {
+    const marea=currentMusicArea();
+    const wantCtx=(SS_isOpen&&SS_CTX==='private')?'private':'slideshow';
+    if(marea!==wantCtx){
+      if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
+      return;
+    }
+  }
   const mctx=SS_musicCtxSafe(); // v2.8b: robustly resolve 'private' vs 'slideshow' playlist
   const ssList=buildPlaylistFor(mctx);   // filtered by the per-song 'Play in' dropdown only
   let wantList=ssList;
@@ -2493,9 +2563,9 @@ function SS_updateSlide(){
         SS_ensureMusicPlaying();
       }
     } else {
-      // FIX 6b: audio is playing while a slideshow slide is shown — verify the loaded
-      // track really belongs to the slideshow playlist; otherwise swap/pause so that
-      // card-only songs can never be heard inside the slideshow.
+      // FIX 6b + v2.9 AREA GATE: audio is playing while a slideshow slide is shown —
+      // verify the loaded track really belongs to THIS area's slideshow/private
+      // playlist; otherwise swap/pause so card-only songs can never be heard here.
       const curSrc=a.currentSrc||a.src||'';
       if(!ssList.includes(curSrc)){
         SS_ensureMusicPlaying();
