@@ -15,8 +15,9 @@
 <div class="home-emoji" id="homeEmoji" title="🎂💕">🎂💕</div>
 <div class="home-title">A surprise awaits…</div>
 <div class="home-sub">Pick who you are to continue 💖</div>
-<div class="home-intro" id="homeIntro">
-  <div class="hi-title">✨ What is this?</div>
+<!-- HD1.3: intro is ALWAYS collapsed on load and only expands when the user taps the button -->
+<div class="home-intro collapsed" id="homeIntro">
+  <div class="hi-title">✨ What is this? <span class="hi-ver-badge" id="hdVersionBadge" title="App version — updates with every card / requester / guest change">HD 1.0</span></div>
   <div class="hi-lead">A personalised surprise card 💌 — filled with messages, photos, videos, countdowns, and memories — made just for someone special.</div>
   <div class="hi-steps">
     <div class="hi-step">
@@ -54,6 +55,18 @@
   </div>
 </div>
 <div class="home-grid" id="homeGrid"><div class="home-loading">Loading…</div></div>
+<!-- 🆕 WHAT'S NEW tab (HD1.3) — home screen ONLY. Shows functional changes made in the
+     card / requester / guest panels (what changed for users — never code-change notes).
+     Rendered by renderWhatsNew() in js/app.js -->
+<div class="home-whatsnew collapsed" id="homeWhatsNew" style="display:none;">
+  <div class="hn-head" id="homeWhatsNewHead">
+    <span class="hn-title">🆕 What's New</span>
+    <span class="hn-count" id="homeWhatsNewCount">0</span>
+    <span class="hn-ver" id="homeWhatsNewVer">HD 1.0</span>
+    <span class="hn-chev">▼</span>
+  </div>
+  <div class="home-whatsnew-body" id="homeWhatsNewList"></div>
+</div>
 <!-- 💐 FINISHED section (HD0.5/HD0.6/HD1.1) — rendered by renderFinishedSection() in js/app.js -->
 <div class="home-finished collapsed" id="homeFinished" style="display:none;">
   <div class="hf-head" id="homeFinishedHead">
@@ -521,6 +534,7 @@
   <button class="panel-tab" data-pane="pane-extras">🎁 Extras</button>
   <button class="panel-tab" data-pane="pane-slideshow">🗺️ Slideshows</button>
   <button class="panel-tab" data-pane="pane-reviews">⭐ Reviews</button>
+  <button class="panel-tab" data-pane="pane-whatsnew">🆕 What's New</button>
   <button class="panel-tab" data-pane="pane-backup">📊 Backup</button>
   <button class="panel-tab" data-pane="pane-guests">✍️ Guest Approvals</button>
   <button class="panel-tab" data-pane="pane-security">🔐 Security</button>
@@ -763,6 +777,23 @@
     <div class="panel-section-title">⭐ All Reviews</div>
     <div id="adminReviewsList">Loading…</div>
     <button type="button" class="repeat-add" id="adminRefreshReviews" style="margin-top:.6rem;">🔄 Refresh</button>
+  </div>
+</div>
+<!-- 🆕 WHAT'S NEW (HD1.3) — admin view of every card / requester / guest change.
+     Shows functional changes only (never code-change notes). Rendered by renderAdminWhatsNew() in js/app.js -->
+<div class="panel-pane" id="pane-whatsnew">
+  <div class="panel-section" style="padding:.6rem .7rem;background:linear-gradient(135deg,#f0f7ff,#e6f0fa);border:2px solid #2a5fd1;">
+    <div class="panel-field" style="margin:0;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+      <label class="panel-label" style="margin:0;">🏷️ App version</label>
+      <span class="hn-ver" id="adminHdVersionBadge" style="font-size:.85rem;">HD 1.0</span>
+      <input type="text" class="panel-input" id="adminNextChangeSummary" placeholder="Optional: describe the next change (e.g., 'Added a new photo to Aarav''s card')" style="flex:1;min-width:220px;">
+    </div>
+    <div class="panel-sub" style="text-align:left;margin-top:.4rem;">Every save from the card, requester, or guest panel bumps the version automatically (HD 1.0 → 1.2 … 1.9 → 2.0) and records what changed — never code details.</div>
+  </div>
+  <div class="panel-section">
+    <div class="panel-section-title">🆕 Change History (card · requester · guest)</div>
+    <div id="adminWhatsNewList">Loading…</div>
+    <button type="button" class="repeat-add" id="adminRefreshWhatsNew" style="margin-top:.6rem;">🔄 Refresh</button>
   </div>
 </div>
 <div class="panel-pane" id="pane-backup">

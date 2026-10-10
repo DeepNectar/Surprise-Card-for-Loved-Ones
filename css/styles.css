@@ -393,3 +393,26 @@ h1.card-title{font-size:2.4rem;font-weight:700;font-style:italic;margin-top:.25r
 .guest-check{accent-color:#8e44ad;width:16px;height:16px;cursor:pointer}
 .reminder-badge{display:inline-block;min-width:1.1em;text-align:center;background:#c0392b;color:#fff;font-size:.62rem;font-weight:900;padding:.08rem .35rem;border-radius:40px;margin-left:.25rem}
 .repeat-row.awaiting-finish{border:1.5px solid #b26a00}
+
+/* ===== 🆕 WHAT'S NEW + VERSION (HD1.3) ===== */
+/* Intro version badge (visible even while the intro stays collapsed) */
+.home-intro .hi-ver-badge{display:inline-block;margin-left:.4rem;background:linear-gradient(135deg,#ffd700,#ffb703);color:#5a2d0c;font-size:.62rem;font-weight:900;padding:.12rem .5rem;border-radius:40px;letter-spacing:.5px;vertical-align:middle;text-transform:none;font-style:normal;}
+/* Home "What's New" tab — collapsed by default, expands on tap */
+.home-whatsnew{margin-top:1rem;width:100%;max-width:680px;background:linear-gradient(135deg,rgba(42,95,209,.16),rgba(26,61,143,.16));border:2px dashed rgba(255,215,0,.4);border-radius:1.2rem;padding:.9rem 1rem;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:0 14px 32px -18px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05) inset;color:#fff;text-align:left;}
+.home-whatsnew.collapsed .home-whatsnew-body{display:none}
+.home-whatsnew .hn-head{display:flex;align-items:center;justify-content:flex-start;gap:.5rem;cursor:pointer;user-select:none;padding:.15rem 0}
+.home-whatsnew .hn-title{font-size:.85rem;font-weight:900;color:#ffe9a8;text-transform:uppercase;letter-spacing:1.3px}
+.home-whatsnew .hn-count{font-size:.62rem;font-weight:900;background:linear-gradient(135deg,#2a5fd1,#1a3d8f);color:#fff;padding:.1rem .45rem;border-radius:40px}
+.hn-ver{font-size:.62rem;font-weight:900;background:linear-gradient(135deg,#ffd700,#ffb703);color:#5a2d0c;padding:.12rem .5rem;border-radius:40px;letter-spacing:.5px;white-space:nowrap}
+.home-whatsnew .hn-chev{margin-left:auto;font-size:.85rem;color:#ffe9a8;transition:transform .25s ease;font-weight:900}
+.home-whatsnew.collapsed .hn-chev{transform:rotate(-90deg)}
+.home-whatsnew:not(.collapsed) .hn-chev{transform:rotate(0deg)}
+.home-whatsnew .home-whatsnew-body{margin-top:.7rem;display:flex;flex-direction:column;gap:.5rem;max-height:320px;overflow-y:auto}
+.hn-item{background:rgba(255,255,255,.95);border-radius:.7rem;padding:.5rem .7rem;border-left:4px solid var(--c-accent);}
+.hn-item .hn-line1{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;font-size:.78rem;font-weight:900;color:var(--c-primary);}
+.hn-item .hn-tag{font-size:.6rem;font-weight:900;padding:.08rem .45rem;border-radius:40px;color:#fff;background:#2a5fd1;text-transform:uppercase;letter-spacing:.5px;}
+.hn-item .hn-tag.guest{background:#8e44ad}
+.hn-item .hn-tag.requester{background:#0a7a3d}
+.hn-item .hn-when{margin-left:auto;font-size:.62rem;color:var(--c-text-muted);font-weight:700}
+.hn-item .hn-sum{font-size:.8rem;color:var(--c-text);line-height:1.5;margin-top:.2rem;}
+.hn-empty{padding:.6rem;color:var(--c-text-muted);font-style:italic;}
