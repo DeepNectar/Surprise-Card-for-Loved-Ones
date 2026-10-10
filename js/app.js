@@ -9,7 +9,27 @@ const T_LEDGER='finished_ledger';
 const FINISHED_BUCKET=window.FINISHED_BUCKET||'site-ledger';
 const FINISHED_FILE='finished_people.json';
 const FALLBACK_ADMIN_PW='Deepnectar@@1617@@';
-const PUBLIC_CARD_LINK='http://vercel.com/';
+// v2.8 FIX: the card link is now ALWAYS the CURRENT deployed URL (origin + path of this page),
+// never a hard-coded placeholder — so sharing / WhatsApp messages always contain a working link.
+const PUBLIC_CARD_FALLBACK='https://deepnectar.vercel.app/'; // used only if window.location is unavailable
+function getCurrentCardBaseUrl(){
+  try{
+    const loc=window.location||{};
+    if(loc.origin&&loc.origin!=='null'&&loc.protocol!=='file:'){
+      let p=String(loc.pathname||'/');
+      p=p.replace(/index\.html?$/i,'');
+      return loc.origin+p;
+    }
+  }catch(e){}
+  return PUBLIC_CARD_FALLBACK;
+}
+function getPublicCardLink(){ return getCurrentCardBaseUrl(); }
+function buildCardLink(slug){
+  const base=getPublicCardLink();
+  const s=String(slug||'').trim();
+  if(!s)return base;
+  return base+(base.indexOf('?')===-1?'?':'&')+'person='+encodeURIComponent(s);
+}
 const DEFAULT_TZ='Asia/Dubai';
 const MODAL_IMG_DURATION_MS = 10000;
 
@@ -1098,17 +1118,45 @@ function musicAllowedInCtx(ctx){ return buildPlaylistFor(ctx).length>0; }
 function musicGuard(ctx){ return musicAllowedInCtx(ctx); }
 function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
 
+// v2.8 CONTEXT MAP — every internal music context used by the engine:
+//   'card'            -> greeting card background music
+//   'slideshow'       -> OUR MEMORIES slideshow (public photos/videos)
+//   'private'         -> OPEN OUR PRIVATE MEMORIES slideshow (v2.8 — its own song)
+//   'video'/'videomusic' -> volume-only contexts (no playlists)
+// UI option values map onto these contexts as follows:
+//   Card / Slideshow / Private slideshow / Both / Everywhere (Card + Slideshow) / Any slideshow (Slideshow + Private)
+const SS_UI_PLACES=['card','slideshow','private'];
+function expandWhere(w){
+  w=String(w||'').trim();
+  if(!w)return ['card','slideshow','private'];
+  if(w==='everywhere')return ['card','slideshow'];
+  if(w==='any-slideshow'||w==='anyslideshow')return ['slideshow','private'];
+  if(w==='all')return ['card','slideshow','private'];
+  // v2.7-compatible value: a song chosen for the normal slideshow also plays in
+  // the private slideshow UNLESS the couple set a dedicated private song.
+  if(w==='slideshow')return ['slideshow','private'];
+  return [w];
+}
+// Engine context ('card' | 'slideshow' | 'private') -> which UI "Play in" options include it.
+const SS_CTX_ACCEPTS={
+  card:['card','both','everywhere'],
+  slideshow:['slideshow','both','everywhere','any-slideshow','anyslideshow','all'],
+  private:['private','slideshow','both','any-slideshow','anyslideshow','all']
+};
 // FIX 6b: per-song 'where' is the SOLE, AUTHORITATIVE placement selector.
 // Whatever the admin picks in the lock panel's "Play in" dropdown for a song is
 // exactly where that song plays — nowhere else:
-//   song 'card'      -> plays ONLY on the greeting card (never in the slideshow)
-//   song 'slideshow' -> plays ONLY inside the slideshow (never on the card)
-//   song 'both'      -> plays in both places
+//   song 'card'            -> plays ONLY on the greeting card
+//   song 'slideshow'       -> plays in the memories slideshow AND (fallback) the private slideshow
+//   song 'private' (v2.8)  -> plays ONLY inside "Open Our Private Memories"
+//   song 'both'            -> plays everywhere
 // The legacy global 'music_mode' radio is intentionally NOT consulted any more,
 // so a saved value of music_mode can never make a song leak into another section.
 function songAllowedIn(s,i,ctx){
   const w=s['song'+i+'_where']||'both';
-  return w==='both'||w===ctx;
+  if(w==='both')return true;
+  if((SS_CTX_ACCEPTS[ctx]||[ctx]).indexOf(w)!==-1)return true;
+  return expandWhere(w).indexOf(ctx)!==-1;
 }
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
@@ -2496,7 +2544,7 @@ function openShareModal(person,guest){
   if(!person){__showToast('❌ No person to share',false);return}
   if(!person.id){__showToast('❌ Save the person first',false);return}
   SHARE_CTX={person,guest};
-  const link=PUBLIC_CARD_LINK+(person.slug?('?person='+encodeURIComponent(person.slug)):'');
+  const link=buildCardLink(person.slug);
   const requesterName=(guest&&guest.guest_name)||(guest&&guest.payload&&guest.payload.guest_info&&guest.payload.guest_info.name)||person.requester_name||'';
   const requesterWa=(guest&&guest.guest_whatsapp)||(guest&&guest.payload&&guest.payload.guest_info&&guest.payload.guest_info.whatsapp)||person.requester_whatsapp||'';
   const editPw=getEditPasswordForPerson(Object.assign({},person,{requester_name:requesterName,requester_whatsapp:requesterWa}));
@@ -2510,7 +2558,7 @@ function openShareModal(person,guest){
     +'<div><strong>View Key:</strong> <code style="background:#fff0f0;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#8b0028;">'+esc(person.password||'(not set)')+'</code></div>'
     +'<div><strong>Edit Key:</strong> <code style="background:#eef3ff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;color:#1a3d8f;">'+esc(editPw||'(add Requester name + WhatsApp)')+'</code></div>'
     +'<div><strong>🔒 Private Media OTP (6-digit):</strong> <code style="background:#e9f7f1;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;font-weight:800;color:#0d5c4a;letter-spacing:.15em;">'+esc(makePrivateOtp(editPw)||'(generated after Edit Key exists)')+'</code></div>'
-    +'<div style="margin-top:.5rem;"><strong>Card link:</strong> <a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">'+esc(link)+'</a></div>'
+    +'<div style="margin-top:.5rem;"><strong>Card link (always the current live link):</strong> <a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">'+esc(link)+'</a></div>'
     +'</div>'
     +'<div style="background:linear-gradient(135deg,#e8f5f0,#d3ede1);border:2px solid #0d5c4a;border-radius:.8rem;padding:.8rem;margin-bottom:.8rem;font-size:.86rem;line-height:1.7;">'
     +'<div style="font-weight:900;color:#0d5c4a;margin-bottom:.45rem;">📲 Send to requester (WhatsApp)</div>'
@@ -2538,8 +2586,12 @@ function openShareModal(person,guest){
 $('shareModalClose').onclick=()=>hide($('shareModal'));
 function buildShareMessage(requesterName,person,link,editPw){
   const name=requesterName||'there';
-  return ['Hi '+name+' 💕','','Your surprise for *'+(person.display_name||person.slug)+'* is ready! 🎉','','🔑 Login ID: '+(person.slug||''),'🔒 View Key: '+(person.password||''),'✏️ Edit Key: '+(editPw||''),'🔐 Private Memories OTP (6-digit, needed to open the private slideshow): '+(makePrivateOtp(editPw)||''),'🌐 Open here: '+link,'','How to use:','• To VIEW the surprise → use the View Key.','• To EDIT the card → use the Edit Key (you will see an ✏️ Edit Card button).','• To open 📸 Private Memories → enter the 6-digit OTP when prompted.','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the View Key (view) OR the Edit Key (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
+  // v2.8: ALWAYS rebuild the link from the CURRENT live URL at send/copy time,
+  // so a stale or hard-coded link can never be shared by mistake.
+  const liveLink=buildCardLink((person&&person.slug)||'');
+  return ['Hi '+name+' 💕','','Your surprise for *'+((person&&person.display_name)||(person&&person.slug)||'')+'* is ready! 🎉','','🔑 Login ID: '+((person&&person.slug)||''),'🔒 View Key: '+((person&&person.password)||''),'✏️ Edit Key: '+(editPw||''),'🔐 Private Memories OTP (6-digit, needed to open the private slideshow): '+(makePrivateOtp(editPw)||''),'🌐 Open here: '+liveLink,'','How to use:','• To VIEW the surprise → use the View Key.','• To EDIT the card → use the Edit Key (you will see an ✏️ Edit Card button).','• To open 📸 Private Memories → enter the 6-digit OTP when prompted.','','Steps:','1) Open the link above.','2) Tap the button with the person\'s name.','3) Enter the View Key (view) OR the Edit Key (edit).','4) Tap the 🎂 cake to reveal the surprise.','','Enjoy! 💖'].join('\n');
 }
+
 
 async function openPersonDetails(p){
   if(!p){alert('No person.');return}
@@ -2582,7 +2634,7 @@ async function openPersonDetails(p){
   const row=(label,val)=>{if(val===undefined||val===null||val==='')return'';return '<div class="detail-row"><strong>'+label+':</strong> '+esc(val)+'</div>'};
   const thumbs=(items,getter)=>{ const html=items.map(getter).filter(Boolean); if(!html.length)return''; return '<div class="thumb-grid">'+html.map(u=>'<div class="thumb"><img src="'+u+'" loading="lazy"></div>').join('')+'</div>'; };
   let h='';
-  const link=PUBLIC_CARD_LINK+(p.slug?('?person='+encodeURIComponent(p.slug)):'');
+  const link=buildCardLink(p.slug);
   h+='<div class="detail-block"><div class="detail-block-title">👤 Person</div>'
     + row('ID',p.id) + row('Display Name',p.display_name) + row('Login ID / Slug',p.slug)
     + row('Birthday',p.birthday) + row('View Key',p.password||'(not set)')
@@ -3294,7 +3346,7 @@ async function approveGuestRow(r,overridePassword,skipStatusUpdate){
     const mediaRows=uniqueMedia.map(m=>{ const row={person_id:newPersonId,type:m.type||'photo',drive_id:m.drive_id||'',src:m.src||'',title:m.title||'',sort_order:0}; if(isPrivateRow(m))row.priv=true; return row; });
     if(mediaRows.length)tasks.push(sb.insBatch(T_MEDIA,mediaRows));
     await Promise.all(tasks);
-    const shareLink=PUBLIC_CARD_LINK+'?person='+encodeURIComponent(slug);
+    const shareLink=buildCardLink(slug);
     if(r.id){
       const patch={status:'approved',approved_person_id:newPersonId,approved_login_id:slug,approved_password:password,approved_share_link:shareLink,approved_at:new Date().toISOString()};
       if(skipStatusUpdate)patch.payload=pl;
@@ -3373,7 +3425,7 @@ async function loadGuestHistory(){
     const created=r.created_at?new Date(r.created_at).toLocaleString():'';
     const loginId=r.approved_login_id||prop.slug||r.target_person_slug||'';
     const pwd=r.approved_password||'';
-    const link=r.approved_share_link||(loginId?PUBLIC_CARD_LINK+'?person='+encodeURIComponent(loginId):PUBLIC_CARD_LINK);
+    const link=(loginId?buildCardLink(loginId):getPublicCardLink())||r.approved_share_link||buildCardLink(loginId);
     const sentAt=r.approved_at?new Date(r.approved_at).toLocaleString():'';
     const editPw=makeRequesterEditPassword(gi.name||r.guest_name,gi.whatsapp||r.guest_whatsapp,loginId);
     const el=document.createElement('div');el.className='repeat-row guest-row'+(due?' awaiting-finish':'');
