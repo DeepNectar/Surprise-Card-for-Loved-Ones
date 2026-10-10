@@ -799,8 +799,12 @@ async function pullWhatsNew(){
     const v=gs&&gs[HD_VERSION_SETTING];if(v&&/^HD\s*\d+\.\d+$/i.test(String(v).trim()))S.HD_VERSION=String(v).trim();
     const w=gs&&gs[WHATS_NEW_SETTING];
     if(w&&String(w).length>2){const arr=JSON.parse(String(w));if(Array.isArray(arr))S.WHATS_NEW=arr;}
+    // 🆕 Admin-only change log (shown in the admin panel's What's New pane only)
+    if(!Array.isArray(S.ADMIN_LOG)){ try{ const ll=localStorage.getItem(ADMIN_LOG_SETTING); if(ll){const arr=JSON.parse(ll);if(Array.isArray(arr))S.ADMIN_LOG=arr;} }catch(e){} }
+    const al=gs&&gs[ADMIN_LOG_SETTING];
+    if(al&&String(al).length>2){const arr=JSON.parse(String(al));if(Array.isArray(arr))S.ADMIN_LOG=arr;}
   }catch(e){}
-  refreshHdVersionBadges();renderWhatsNew();
+  refreshHdVersionBadges();renderWhatsNew();renderAdminLog();
 }
 async function recordWhatsNew(panel,personName,summaryText){
   // Bump version ONLY for real changes in the card / requester / guest panels.
@@ -814,6 +818,31 @@ async function recordWhatsNew(panel,personName,summaryText){
   try{localStorage.setItem(HD_VERSION_SETTING,nextVer);localStorage.setItem(WHATS_NEW_SETTING,JSON.stringify(S.WHATS_NEW));}catch(_){}
   refreshHdVersionBadges();renderWhatsNew();renderAdminWhatsNew();
 }
+// 🆕 HD1.3 — ADMIN PANEL: record admin-only changes (add person, approve/reject submissions,
+// mark finished, global settings…). Shown ONLY inside the admin panel's What's New pane —
+// never on the home screen. Does NOT bump the HD version (version moves only with card /
+// requester / guest content changes, per spec).
+const ADMIN_LOG_SETTING='shared__admin_log';
+const ADMIN_LOG_MAX=60;
+async function recordAdminChange(text,detail){
+  const name=(S.CURRENT_PERSON&&(S.CURRENT_PERSON.display_name||S.CURRENT_PERSON.slug))||(detail||'');
+  const entry={at:new Date().toISOString(),by:'Admin',text:String(text||'').slice(0,200),name:String(name||'').slice(0,80)};
+  S.ADMIN_LOG=[entry].concat(S.ADMIN_LOG||[]).slice(0,ADMIN_LOG_MAX);
+  try{ await sb.upSet({[ADMIN_LOG_SETTING]:JSON.stringify(S.ADMIN_LOG)},null); }catch(e){console.warn('[adminlog] cloud save failed:',e&&e.message);}
+  try{localStorage.setItem(ADMIN_LOG_SETTING,JSON.stringify(S.ADMIN_LOG));}catch(_){}
+  renderAdminLog();
+}
+window.recordAdminChange=recordAdminChange;
+function renderAdminLog(){
+  const list=$('adminLogList');if(!list)return;
+  const items=S.ADMIN_LOG||[];
+  if(!items.length){list.innerHTML='<div class="hn-empty">No admin actions recorded yet. Adding people, approving/rejecting submissions and other admin changes will appear here.</div>';return;}
+  list.innerHTML=items.map(it=>{
+    const when=it.at?new Date(it.at).toLocaleString():'';
+    return '<div class="hn-item"><div class="hn-line1"><span class="hn-tag admin">🛠️ Admin</span><span>'+hnEsc(it.text||'')+'</span>'+(it.name?('<span>· '+hnEsc(it.name)+'</span>'):'')+'<span class="hn-when">'+hnEsc(when)+'</span></div></div>';
+  }).join('');
+}
+window.renderAdminLog=renderAdminLog;
 function whatsNewSnapshot(){
   // Snapshot of the CURRENT in-memory state of the person being edited — used to diff against before/after saves.
   const c=S.CURR||{};
@@ -871,6 +900,75 @@ async function withWhatsNew(panel,personName,prevSnap,saveFn){
   }catch(e){ throw e; }
 }
 window.withWhatsNew=withWhatsNew;
+/* ---- HD1.3 cloud-state diff helpers used by the three save paths (card / requester / guest) ---- */
+function wnCountRows(rows){return (rows||[]).filter(r=>r&&(r.drive_id||r.src||r.title||r.message||r.label||r.body||r.audio_url||r.video_url||r.photo_drive_id||r.lat)).length;}
+function wnMediaTitle(r){return String(r.title||'').replace(/^\s*\u{1F512}\s*/u,'');}
+async function wnReadCloud(pid){
+  const out={settings:{},lists:{}};
+  try{ out.settings=await sb.getSet(pid)||{}; }catch(e){}
+  const tables={gifts:T_GIFTS,story:T_STORY,events:T_EVENTS,voice:T_VOICE,video:T_VIDEO,pins:T_PINS,media:T_MEDIA};
+  for(const key of Object.keys(tables)){ try{ out.lists[key]=await sb.rows(tables[key],pid)||[]; }catch(e){ out.lists[key]=[]; } }
+  return out;
+}
+function wnFromDraft(d){
+  d=d||{};
+  const settings={};
+  const sh=d.shared||{};
+  Object.keys(sh).forEach(k=>{settings['shared__'+k]=String(sh[k]==null?'':sh[k]);});
+  if(d.theme!==undefined&&d.theme!=='')settings['shared__theme']=String(d.theme);
+  const tb=d.textsByLang||{};const tx=d.texts||{};
+  ['en','gu','hi'].forEach(lang=>{
+    let t=tb[lang];
+    if(!t){ t=(lang==='en'?(d.texts_en||tx):(lang==='gu'?d.texts_gu:d.texts_hi))||{}; }
+    Object.keys(t||{}).forEach(f=>{settings['texts__'+lang+'_'+f]=String(t[f]==null?'':t[f]);});
+  });
+  const lists={gifts:d.gifts||[],story:d.story||[],events:d.events||[],voice:d.voice||[],video:d.video||[],pins:d.pins||[],media:(d.media||[]).concat((d.privateMedia||[]).map(m=>Object.assign({},m,{priv:true})))};
+  return {settings:settings,lists:lists};
+}
+function wnDiffSummary(name,before,after){
+  before=before||{settings:{},lists:{}};after=after||{settings:{},lists:{}};
+  const parts=[];
+  const TABLE_LABELS={media:'photo/video',gifts:'gift box',story:'story page',events:'countdown event',voice:'voice message',video:'video message',pins:'map pin'};
+  const rowKey=(table,r)=>{
+    r=r||{};
+    switch(table){
+      case 'gifts': return [r.emoji||'',r.title||'',r.message||'',r.photo_drive_id||''].join('|');
+      case 'story': return [r.title||'',r.body||'',r.photo_drive_id||''].join('|');
+      case 'events':return [r.icon||'',r.label||'',String(r.target_iso||'')].join('|');
+      case 'voice': return [r.title||'',r.audio_url||''].join('|');
+      case 'video': return [r.title||'',r.video_url||''].join('|');
+      case 'pins':  return [r.label||'',String(r.lat||''),String(r.lng||''),r.photo_drive_id||'',String(r.story||'').slice(0,60)].join('|');
+      case 'media': return [r.type||'',String(r.drive_id||r.src||'').trim().toLowerCase(),String(r.priv==='true'||r.priv===true),wnMediaTitle(r)].join('|');
+      default: return JSON.stringify(r);
+    }
+  };
+  Object.keys(TABLE_LABELS).forEach(key=>{
+    const b=(before.lists&&before.lists[key])||[],a=(after.lists&&after.lists[key])||[];
+    const bn=wnCountRows(b),an=wnCountRows(a);
+    if(an>bn)parts.push('+'+(an-bn)+' '+TABLE_LABELS[key]);
+    else if(bn>an)parts.push('\u2212'+(bn-an)+' '+TABLE_LABELS[key]);
+    else{
+      const bk=b.map(r=>rowKey(key,r)).sort().join('#'),ak=a.map(r=>rowKey(key,r)).sort().join('#');
+      if(bk!==ak&&bn>0)parts.push(TABLE_LABELS[key]+' edited');
+    }
+  });
+  const bs=before.settings||{},as=after.settings||{};
+  const allKeys=new Set([...Object.keys(bs),...Object.keys(as)]);
+  let textN=0,otherN=0;
+  allKeys.forEach(k=>{
+    const bv=String(bs[k]==null?'':bs[k]),av=String(as[k]==null?'':as[k]);
+    if(bv===av)return;
+    if(k.indexOf('texts__')===0){textN++;return;}
+    if(k==='shared__theme'&&av)parts.push('theme \u2192 '+av);
+    else if(/^shared__(title|subtitle|introText|letterText|closingText)$/.test(k)&&av)parts.push(k.replace(/^shared__/,'')+' updated');
+    else otherN++;
+  });
+  if(textN)parts.push(textN+' text update'+(textN>1?'s':''));
+  if(otherN&&!parts.length)parts.push(otherN+' setting'+(otherN>1?'s':'')+' updated');
+  const who=name?('For "'+name+'": '):'';
+  return who+(parts.length?parts.join(', '):'card updated');
+}
+window.wnReadCloud=wnReadCloud;window.wnFromDraft=wnFromDraft;window.wnDiffSummary=wnDiffSummary;
 (function wireHomeWhatsNew(){
   const wrap=$('homeWhatsNew'),head=$('homeWhatsNewHead');
   if(!wrap||!head)return;
@@ -1670,9 +1768,11 @@ async function tryAdminFull(){
 async function loadPersonIntoState(p){
   S.CURRENT_PERSON=p;
   S.CURR={texts:{},textsByLang:{en:{},gu:{},hi:{}},shared:{},gifts:[],story:[],events:[],voice:[],video:[],pins:[],media:[]};
-  if(!p)return;
+  if(!p){S.LAST_CLOUD_SNAP=null;return;}
   const set=await sb.getSet(p.id);
   S.CURRENT_SETTINGS=set;
+  // 🆕 HD1.3: remember the exact cloud state we loaded, so the requester save can diff "before vs after".
+  try{ S.LAST_CLOUD_SNAP=await wnReadCloud(p.id); }catch(e){ S.LAST_CLOUD_SNAP=null; }
   const shared={};
   Object.keys(set).forEach(k=>{if(k.startsWith('shared__'))shared[k.substring(8)]=set[k]});
   S.CURR.shared=shared;
@@ -2939,6 +3039,7 @@ async function apSavePerson(){
   if(window.buildHome)window.buildHome();
   renderPeopleRepeater();buildAdminPersonDropdown();
   st.textContent='✅ Saved "'+name+'" (#'+savedId+')'; st.className='panel-status ok';
+  try{ await recordAdminChange('➕ Added person: '+name,name); }catch(e){}
   return true;
 }
 $('openAddPersonBtn').onclick=()=>apOpenModal();
@@ -3182,12 +3283,10 @@ function renderAdminMedia(){ const w=$('mediaRepeater');if(!w)return;w.innerHTML
 $('addMediaRow').onclick=()=>{S.CURR.media=S.CURR.media||[];S.CURR.media.push({type:'photo',drive_id:'',src:'',title:''});renderAdminMedia()};
 
 async function saveAdminAll(){
-  // 🆕 HD1.3: capture the cloud "before" state so we can record WHAT changed (content only).
+  // 🆕 HD1.3: capture the cloud "before" state so we can record WHAT changed (content only — never code details).
   const __wnPrevPid=S.CURRENT_PERSON&&S.CURRENT_PERSON.id;
   const __wnPrevName=(S.CURRENT_PERSON&&(S.CURRENT_PERSON.display_name||S.CURRENT_PERSON.slug))||'';
-  const __wnPrev=__wnPrevPid?(await sb.getSet(__wnPrevPid)):{};
-  const __wnPrevLists={};
-  if(__wnPrevPid){ try{ __wnPrevLists.gifts=await sb.rows(T_GIFTS,__wnPrevPid);__wnPrevLists.story=await sb.rows(T_STORY,__wnPrevPid);__wnPrevLists.events=await sb.rows(T_EVENTS,__wnPrevPid);__wnPrevLists.voice=await sb.rows(T_VOICE,__wnPrevPid);__wnPrevLists.video=await sb.rows(T_VIDEO,__wnPrevPid);__wnPrevLists.pins=await sb.rows(T_PINS,__wnPrevPid);__wnPrevLists.media=await sb.rows(T_MEDIA,__wnPrevPid);}catch(e){} }
+  const __wnBefore=__wnPrevPid?(await wnReadCloud(__wnPrevPid)):null;
   const __wnPrevPeople=(await sb.people())||[];
   saveAdminTextsFromFields(S.ADMIN_EDIT_LANG);
   readAdminFields();
@@ -3265,6 +3364,23 @@ async function saveAdminAll(){
   S.PEOPLE=await sb.people()||[];
   if(window.buildHome)window.buildHome();
   renderPeopleRepeater();buildAdminPersonDropdown();
+  // 🆕 HD1.3: bump the version + show on home "What's New" ONLY for real content changes in this person's card.
+  try{
+    if(__wnPrevPid){
+      const __wnAfter=await wnReadCloud(__wnPrevPid);
+      const __wnSum=wnDiffSummary(__wnPrevName,__wnBefore,__wnAfter);
+      if(String(__wnSum).replace(/^For ".*?":\s*/,'')!=='card updated'){ await recordWhatsNew('card',__wnPrevName,__wnSum); }
+    }
+    const __wnNowPeople=(await sb.people())||[];
+    const __wnAdded=__wnNowPeople.filter(x=>!__wnPrevPeople.some(y=>y.id===x.id));
+    const __wnRemoved=__wnPrevPeople.filter(y=>!__wnNowPeople.some(x=>x.id===y.id));
+    if(__wnAdded.length)await recordAdminChange('➕ Added person'+(__wnAdded.length>1?'s':'')+': '+__wnAdded.map(x=>x.display_name||x.slug).join(', '));
+    if(__wnRemoved.length)await recordAdminChange('🗑️ Removed person'+(__wnRemoved.length>1?'s':'')+': '+__wnRemoved.map(x=>x.display_name||x.slug).join(', '));
+    if(__wnPrevPid&&!__wnAdded.length&&!__wnRemoved.length){
+      const __wnSumTxt=String(__wnSum||'');
+      if(__wnSumTxt&&__wnSumTxt.replace(/^For ".*?":\s*/,'')!=='card updated'){ await recordAdminChange('💾 Card saved: '+__wnSumTxt.slice(0,140),__wnPrevName); }
+    }
+  }catch(e){console.warn('[whatsnew] admin diff failed:',e&&e.message);}
 }
 $('adminSave').onclick=async()=>{ const t0=Date.now();window.__showToast('⏳ Saving…'); try{ await saveAdminAll(); window.__showToast('✅ Saved in '+Math.round((Date.now()-t0)/100)/10+'s'); setTimeout(()=>hide($('adminPanel')),300); } catch(e){window.__showToast('❌ '+(e.message||'Save failed'),false);console.error(e)} };
 $('adminSavePreviewBtn').onclick=async()=>{ const t0=Date.now();window.__showToast('⏳ Saving then previewing…'); try{ await saveAdminAll(); const fresh=S.PEOPLE.find(p=>p.id===S.ADMIN_EDIT_PERSON_ID); if(!fresh){window.__showToast('❌ No person selected',false);return} S.CURRENT_PERSON=fresh; await loadPersonIntoState(fresh); hide($('adminPanel'));S.PREVIEW_MODE=true;S.REQUESTER_MODE=false; await showViewerFor(fresh,true); window.__showToast('✅ Saved & previewing ('+Math.round((Date.now()-t0)/100)/10+'s)'); } catch(e){window.__showToast('❌ '+(e.message||'Preview failed'),false);console.error(e)} };
@@ -3282,8 +3398,12 @@ document.querySelectorAll('#adminPanel .panel-tab').forEach(tab=>{
     if(tab.dataset.pane==='pane-guests'){loadGuestApprovals();loadGuestHistory();if(window.bindGuestStatusTabs)bindGuestStatusTabs();if(window.loadAdminFinished)loadAdminFinished();if(window.updateFinishedBadge)updateFinishedBadge();}
     if(tab.dataset.pane==='pane-reviews'){loadReviews();}
     if(tab.dataset.pane==='pane-people'){renderPeopleRepeater();}
+    // 🆕 HD1.3: refresh both What's New lists when the admin opens the tab
+    if(tab.dataset.pane==='pane-whatsnew'){renderWhatsNew();renderAdminWhatsNew();renderAdminLog();pullWhatsNew();}
   };
 });
+// 🆕 HD1.3: manual refresh button inside the admin What's New pane
+if($('adminRefreshWhatsNew'))$('adminRefreshWhatsNew').onclick=async()=>{ await pullWhatsNew(); renderAdminWhatsNew(); renderAdminLog(); };
 
 $('adminExportBtn').onclick=async()=>{
   const st=$('adminDataStatus');st.textContent='⏳ Building…';st.className='panel-status';
@@ -3454,7 +3574,7 @@ async function loadGuestApprovals(){
           const result=await approveGuestRow(r,null,false);
           if(result.ok){ const freshPerson=S.PEOPLE.find(p=>p.id===result.personId); if(freshPerson)openShareModal(freshPerson,r); window.__showToast('✅ Approved — person #'+result.personId+' created'); }
           else{ window.__showToast('❌ '+result.err,false);b.disabled=false;return; }
-        }else{ await sb.updGuest(id,{status:'rejected'}); window.__showToast('🗑️ Rejected'); }
+        }else{ await sb.updGuest(id,{status:'rejected'}); window.__showToast('🗑️ Rejected'); try{ await recordAdminChange('❌ Rejected submission: '+(((r.payload||{}).person_proposal||{}).display_name||r.target_person_slug||''),((r.payload||{}).guest_info||{}).name||r.guest_name||''); }catch(e){} }
         loadGuestApprovals();loadGuestHistory();
       }catch(e){window.__showToast('❌ '+e.message,false);b.disabled=false}
     };
@@ -3790,6 +3910,13 @@ async function approveGuestRow(r,overridePassword,skipStatusUpdate){
     S.PEOPLE=await sb.people()||[];
     if(window.buildHome)window.buildHome();
     renderPeopleRepeater();buildAdminPersonDropdown();
+    // 🆕 HD1.3: a new card created from a guest submission = real change -> bumps version + shows on home What's New.
+    try{
+      const __wnDraft=wnFromDraft({shared:pl.shared||{},theme:pl.theme,texts_en:pl.texts_en||pl.texts||{},texts_gu:pl.texts_gu||{},texts_hi:pl.texts_hi||{},gifts:pl.gifts,story:pl.story,events:pl.events,voice:pl.voice,video:pl.video,pins:pl.pins,media:uniqueMedia,privateMedia:[]});
+      const __wnSum=wnDiffSummary(display_name,{settings:{},lists:{}},__wnDraft);
+      await recordWhatsNew('guest',display_name,'new card created — '+String(__wnSum).replace(/^For ".*?":\s*/,''));
+    }catch(e){console.warn('[whatsnew] guest approval record failed:',e&&e.message);}
+    try{ await recordAdminChange('✅ Approved guest submission — new person: '+display_name,display_name); }catch(e){}
     return{ok:true,personId:newPersonId,password,slug};
   }catch(e){ return{ok:false,err:e.message||'Approval failed'}; }
 }
@@ -4697,6 +4824,12 @@ $('guestSubmit').onclick=async()=>{
   try{
     const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_GUEST}`,{method:'POST',headers:sb.h(),body:JSON.stringify({ guest_name:gname,guest_relation:rel,guest_whatsapp:gwa,target_person_slug:newSlug,payload,status:'pending' })});
     if(!r.ok){const t=await r.text();throw new Error('submit failed '+r.status+' '+t)}
+    // 🆕 HD1.3: every real guest-panel submission is a change -> bumps version + shows on home What's New.
+    try{
+      const __wnDraft=wnFromDraft({shared:sharedOut,theme:G.theme,texts_en:(S.GUEST_TEXTS&&S.GUEST_TEXTS.en)||{},texts_gu:(S.GUEST_TEXTS&&S.GUEST_TEXTS.gu)||{},texts_hi:(S.GUEST_TEXTS&&S.GUEST_TEXTS.hi)||{},gifts:G.gifts,story:G.story,events:G.events,voice:G.voice,video:G.video,pins:G.pins,media:dedupedPub,privateMedia:dedupedPriv});
+      const __wnSum=wnDiffSummary(newName,{settings:{},lists:{}},__wnDraft);
+      await recordWhatsNew('guest',newName,'request submitted for review — '+String(__wnSum).replace(/^For ".*?":\s*/,''));
+    }catch(e){console.warn('[whatsnew] guest submit record failed:',e&&e.message);}
     st.textContent='✅ Submitted!';st.className='panel-status ok';
     setTimeout(()=>{
       if(confirm('Submitted!\n\nWe will WhatsApp you the Login ID + View Key + Edit Key once approved.\n\nSend us a WhatsApp message now to speed up the approval?')){
@@ -4899,6 +5032,18 @@ $('reSave').onclick=async()=>{
     ]);
     st.textContent='✅ Saved!';st.className='panel-status ok';
     __showToast('💾 Card updated');
+    // 🆕 HD1.3: requester-panel changes bump the version + appear on the home What's New tab.
+    try{
+      const __wnBefore=S.LAST_CLOUD_SNAP;
+      const __wnAfter=await wnReadCloud(pid);
+      const __wnName=(p.display_name||p.slug)||'';
+      if(__wnBefore){
+        const __wnSum=wnDiffSummary(__wnName,__wnBefore,__wnAfter);
+        if(String(__wnSum).replace(/^For ".*?":\s*/,'')!=='card updated'){ await recordWhatsNew('requester',__wnName,__wnSum); }
+      }else{
+        await recordWhatsNew('requester',__wnName,'card content updated');
+      }
+    }catch(e){console.warn('[whatsnew] requester save record failed:',e&&e.message);}
     await loadPersonIntoState(p);
     hide($('requesterEditModal'));
     renderCardFull();
@@ -4907,6 +5052,10 @@ $('reSave').onclick=async()=>{
 
 async function boot(){
   document.body.setAttribute('data-theme','romantic');
+  // 🆕 HD1.3: restore the last version + What's New history instantly (localStorage), then from cloud.
+  try{ const lv=localStorage.getItem(HD_VERSION_SETTING); if(lv&&/^HD\s*\d+\.\d+$/i.test(String(lv).trim()))S.HD_VERSION=String(lv).trim(); }catch(e){}
+  try{ const lw=localStorage.getItem(WHATS_NEW_SETTING); if(lw){const arr=JSON.parse(lw);if(Array.isArray(arr))S.WHATS_NEW=arr;} }catch(e){}
+  refreshHdVersionBadges();renderWhatsNew();
   initAllTzSelects();
   const emo=['❤️','💛','🌹','💕','✨','💗','🌺','💝','🌸','💞'];
   for(let i=0;i<18;i++){
@@ -4925,6 +5074,8 @@ async function boot(){
   S.PEOPLE=await sb.people()||[];
   const gs=await sb.getSet(null);
   S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled'])};
+  // 🆕 HD1.3: pull the shared version + What's New history from the cloud after first paint.
+  try{ await pullWhatsNew(); }catch(e){}
   if(window.buildHome)window.buildHome();
   if(window.updateFinishedBadge)updateFinishedBadge();
   // Background maintenance (non-blocking): sync ledger + due people, repaint only when changed
