@@ -304,8 +304,29 @@ h1.card-title{font-size:2.4rem;font-weight:700;font-style:italic;margin-top:.25r
 .music-toggle.visible{display:flex}
 .lang-toggle{position:fixed;bottom:1rem;right:4.6rem;width:3.2rem;height:3.2rem;border-radius:50%;background:linear-gradient(135deg,#0a4f8f,#1668b8);color:#fff;border:2px solid var(--c-accent);font-size:1rem;font-weight:900;cursor:pointer;display:none;align-items:center;justify-content:center;z-index:6000;font-family:inherit;-webkit-tap-highlight-color:transparent}
 .lang-toggle.visible{display:flex}
-.toast{position:fixed;bottom:5rem;left:50%;transform:translateX(-50%);background:rgba(10,122,61,.95);color:#fff;padding:.7rem 1.4rem;border-radius:40px;font-weight:800;font-size:.9rem;z-index:999999;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;font-family:inherit}
+.toast{position:fixed;bottom:5rem;left:50%;transform:translateX(-50%);background:rgba(10,122,61,.95);color:#fff;padding:.7rem 1.4rem;border-radius:40px;font-weight:800;font-size:.9rem;z-index:2147483000;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;font-family:inherit;max-width:min(92vw,520px);text-align:center;line-height:1.45}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
+
+/* ── Popup stacking (v2.9) ────────────────────────────────────────────────
+   Every message / confirmation / share popup must render ON TOP of the open
+   admin / requester panel — never behind it (so you never have to close the
+   panel just to read a message). The JS bumps `.is-topmost` on whichever
+   overlay was opened last, so nested popups (share → confirm → toast) always
+   appear above the big panel. */
+.pop-layer{position:fixed;inset:0;background:rgba(20,0,10,.92);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;padding:1rem;opacity:0;visibility:hidden;transition:opacity .25s,visibility .25s;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:2147482000}
+.pop-layer.active{opacity:1;visibility:visible}
+.pop-layer.is-topmost{z-index:2147482500}
+.pop-card{background:linear-gradient(160deg,#fffaf5,#fff0f0);border-radius:1.6rem;padding:1.6rem 1.3rem;max-width:560px;width:100%;box-shadow:0 30px 60px -15px rgba(0,0,0,.7),0 0 0 2px var(--c-accent);position:relative;margin:auto;text-align:center}
+.pop-icon{font-size:2.3rem;line-height:1;margin-bottom:.5rem}
+.pop-title{font-size:1.15rem;font-weight:800;color:var(--c-primary);font-style:italic;margin-bottom:.5rem;font-family:var(--font-display)}
+.pop-msg{font-size:.95rem;line-height:1.7;color:var(--c-text);white-space:pre-wrap;word-break:break-word;max-height:46vh;overflow-y:auto;-webkit-overflow-scrolling:touch;text-align:left}
+.pop-input{width:100%;padding:.8rem .9rem;border:2px solid var(--c-accent);border-radius:.7rem;font-size:1rem;font-weight:600;color:var(--c-deep);background:#fff;outline:none;font-family:inherit;margin-top:.8rem}
+.pop-actions{display:flex;gap:.55rem;flex-wrap:wrap;justify-content:center;margin-top:1.15rem}
+.pop-btn{flex:1;min-width:120px;padding:.8rem 1rem;border:none;border-radius:var(--radius-btn);font-size:.92rem;font-weight:800;cursor:pointer;font-family:inherit;font-style:italic;-webkit-tap-highlight-color:transparent}
+.pop-btn.ok{background:linear-gradient(135deg,var(--c-primary),var(--c-primary-2));color:var(--c-accent)}
+.pop-btn.no{background:#f0f0f0;color:var(--c-deep)}
+.pop-btn.wa{background:linear-gradient(135deg,#25D366,#128C7E);color:#fff}
+@media (max-width:600px){.pop-msg{max-height:40vh}.pop-btn{min-width:100px;padding:.7rem .8rem;font-size:.86rem}}
 @media (max-width:600px){.home-btn{min-width:130px;padding:.9rem 1rem;font-size:.95rem}.card{padding:1.8rem 1.15rem}h1.card-title{font-size:1.85rem}.names{font-size:1.35rem;padding:.5rem 1.7rem}.slideshow-nav{width:2.6rem;height:2.6rem}.panel-content{padding:1.3rem .9rem}.slider-row label{flex:0 0 100px}}
 .detail-block{margin-bottom:1rem;padding:.8rem;background:#fffdf8;border:1px solid rgba(196,30,58,.15);border-radius:.7rem}
 .detail-block-title{font-size:.9rem;font-weight:800;color:var(--c-primary);margin-bottom:.5rem;border-bottom:1px dashed rgba(196,30,58,.25);padding-bottom:.3rem}
