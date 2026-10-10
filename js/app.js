@@ -759,6 +759,7 @@ async function triggerAdminPrompt(){
 const HD_VERSION_SETTING='shared__hd_version';
 const WHATS_NEW_SETTING='shared__whats_new';
 const WHATS_NEW_MAX=60; // keep the newest 60 entries in the cloud
+const WHATS_NEW_SEED_FLAG='surprise_whatsnew_seeded_v1'; // 🆕 HD1.3: one-time bootstrap guard (local only)
 
 function bumpHdVersion(cur){
   const m=/^HD\s*(\d+)\.(\d+)$/i.exec(String(cur||'').trim());
@@ -829,6 +830,27 @@ async function pullWhatsNew(){
     if(al&&String(al).length>2){const arr=JSON.parse(String(al));if(Array.isArray(arr))S.ADMIN_LOG=arr;}
   }catch(e){}
   refreshHdVersionBadges();renderWhatsNew();renderAdminLog();
+}
+// 🆕 HD1.3 FIX: one-time bootstrap — if both local AND cloud histories are empty (fresh device or a
+// previously lost row), seed the newest release notes so the "What's New" area shows up on the home
+// screen immediately instead of staying hidden until the next card edit. Guarded by a flag + the
+// merge logic above, so it never overwrites real history and runs only once per device.
+async function ensureWhatsNewSeeded(){
+  try{
+    if((S.WHATS_NEW||[]).length)return;
+    if(localStorage.getItem(WHATS_NEW_SEED_FLAG)==='1')return;
+    localStorage.setItem(WHATS_NEW_SEED_FLAG,'1');
+    const now=Date.now();const iso=m=>new Date(now-m*60000).toISOString();
+    S.WHATS_NEW=[
+      {v:'HD 1.3',panel:'site',name:'',summary:'💐 Finished list fixed: corrupted cloud entries no longer hide finished people; 🆕 What\u2019s New history now syncs across devices',at:iso(0)},
+      {v:'HD 1.2',panel:'site',name:'',summary:'Due-but-still-present approved people auto-move onto the 💐 Finished ledger',at:iso(240)},
+      {v:'HD 1.1',panel:'site',name:'',summary:'Cloud finished ledger pulls on every repaint; “awaiting finish” flags added',at:iso(480)},
+      {v:'HD 1.0',panel:'site',name:'',summary:'💐 Finished permanent three-copy cloud ledger (HD0.6) with self-healing setup',at:iso(720)}
+    ].slice(0,WHATS_NEW_MAX);
+    try{await sb.upSet({[HD_VERSION_SETTING]:S.HD_VERSION,[WHATS_NEW_SETTING]:JSON.stringify(S.WHATS_NEW)},null);}catch(_){}
+    try{localStorage.setItem(WHATS_NEW_SETTING,JSON.stringify(S.WHATS_NEW));}catch(_){}
+    renderWhatsNew();
+  }catch(e){}
 }
 async function recordWhatsNew(panel,personName,summaryText){
   // Bump version ONLY for real changes in the card / requester / guest panels.
@@ -4336,8 +4358,8 @@ async function doPushFinishedLedger(){
     const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
     const remote=[...parse(jsonTxt),...parse(setTxt),...parse(tblTxt)];
     const local=lsGetArr(FINISHED_KEY);
-    const tombs=getPurgedList();
-    const merged=mergeTwoListsRaw(mergeTwoListsRaw(local,remote),tombs); // tombstones appended LAST → win
+    const tombs=getPurgedList().filter(isRealTombstone); // 💐 HD1.3: never re-publish ghost tombstones to the cloud
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw(local,remote.filter(e=>!e||!e.deleted||isRealTombstone(e))),tombs); // tombstones appended LAST → win
     const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
     lsSetArr(FINISHED_KEY,merged.filter(x=>!x.deleted),200);
     await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
@@ -4358,7 +4380,24 @@ async function pullFinishedLedger(){
     let changed=false;
     const before=JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList());
     remote.forEach(p=>{if(p&&p.slug)mergeFinishedEntry(p)});
-    changed=(JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList()))!==before;
+    // 💐 HD1.3 FIX: repair the CLOUD ledger itself. Ghost tombstones (deleted:true with wiped_at=null)
+    // that were pushed by older builds stay in all three copies forever and keep re-purging every device.
+    // Drop them from the remote data, then resurrect any locally-known person a ghost had wrongly purged.
+    const ghostsDropped=remote.some(p=>p&&p.deleted&&!isRealTombstone(p));
+    if(ghostsDropped){
+      const ghostSlugs={};
+      remote.forEach(p=>{if(p&&p.slug&&p.deleted&&!isRealTombstone(p))ghostSlugs[String(p.slug).toLowerCase()]=true});
+      const healed=remote.filter(p=>!(p&&p.deleted&&!isRealTombstone(p)));
+      Object.keys(ghostSlugs).forEach(s=>{
+        forgetPurged(s); // lift the fake tombstone on this device…
+        const rec=getWipedArchive().find(x=>String(x.slug||'').toLowerCase()===s)||
+                  lsGetArr(WIPED_ARCHIVE_KEY).find(x=>String(x.slug||'').toLowerCase()===s);
+        if(rec)mergeFinishedEntry(Object.assign({},rec,{deleted:false})); // …and bring the person back
+        else if(healed.some(x=>!x.deleted&&String(x.slug||'').toLowerCase()===s))mergeFinishedEntry(healed.find(x=>String(x.slug||'').toLowerCase()===s));
+      });
+      pushFinishedLedger(); // republish the cleaned ledger to all three cloud copies
+    }
+    changed=ghostsDropped||(JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList()))!==before;
     return changed;
   }catch(e){return false}
 }
@@ -4415,7 +4454,10 @@ async function removeFinishedPerson(slug){
   try{
     const [jsonTxt,setTxt,tblTxt]=await Promise.all([sb.sbGetFinishedJson(),sb.sbGetFinishedFromSettings(),sb.sbGetFinishedFromTable()]);
     const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
-    const merged=mergeTwoListsRaw(mergeTwoListsRaw([...parse(tblTxt),...parse(setTxt),...parse(jsonTxt),...lsGetArr(FINISHED_KEY)],[tomb]),[tomb]);
+    // 💐 HD1.3: strip ghost tombstones from the remote copies while we're writing the real one
+    const remoteAll=[...parse(tblTxt),...parse(setTxt),...parse(jsonTxt)];
+    const remoteClean=remoteAll.filter(e=>e&&!(e.deleted&&!isRealTombstone(e)));
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw([...remoteClean,...lsGetArr(FINISHED_KEY)],[tomb]),[tomb]);
     const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
     await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
   }catch(e){console.warn('[finished-ledger] remove push failed:',e&&e.message)}
@@ -5197,6 +5239,9 @@ async function boot(){
   S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled']),adminSlug:(gs&&gs['shared__admin_slug'])||DEFAULT_ADMIN_SLUG};
   // 🆕 HD1.3: pull the shared version + What's New history from the cloud after first paint.
   try{ await pullWhatsNew(); }catch(e){}
+  // 🆕 HD1.3 FIX: if both local and cloud histories are still empty, seed the release notes so
+  // the "What's New" area is visible on the home screen right away (runs once per device).
+  try{ await ensureWhatsNewSeeded(); }catch(e){}
   if(window.buildHome)window.buildHome();
   if(window.updateFinishedBadge)updateFinishedBadge();
   // Background maintenance (non-blocking): sync ledger + due people, repaint only when changed
