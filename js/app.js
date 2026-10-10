@@ -759,6 +759,7 @@ async function triggerAdminPrompt(){
 const HD_VERSION_SETTING='shared__hd_version';
 const WHATS_NEW_SETTING='shared__whats_new';
 const WHATS_NEW_MAX=60; // keep the newest 60 entries in the cloud
+const WHATS_NEW_SEED_FLAG='surprise_whatsnew_seeded_v1'; // 🆕 HD1.3: one-time bootstrap guard (local only)
 
 function bumpHdVersion(cur){
   const m=/^HD\s*(\d+)\.(\d+)$/i.exec(String(cur||'').trim());
@@ -797,17 +798,59 @@ function buildChangeSummary(personName,prev,next){
   return who+(parts.length?parts.join(', '):'card updated');
 }
 async function pullWhatsNew(){
+  // 🆕 HD1.3 FIX: seed the history from localStorage FIRST. Previously, when a save happened while
+  // offline (or the cloud row was missing), the local entries were later overwritten by an empty
+  // cloud list and the "What's New" area stayed hidden on the home screen forever.
+  try{
+    const lv=localStorage.getItem(HD_VERSION_SETTING);
+    if(lv&&/^HD\s*\d+\.\d+$/i.test(String(lv).trim()))S.HD_VERSION=String(lv).trim();
+    const lw=localStorage.getItem(WHATS_NEW_SETTING);
+    if(lw){const arr=JSON.parse(lw);if(Array.isArray(arr)&&arr.length)S.WHATS_NEW=arr;}
+  }catch(e){}
   try{
     const gs=await sb.getSet(null);
     const v=gs&&gs[HD_VERSION_SETTING];if(v&&/^HD\s*\d+\.\d+$/i.test(String(v).trim()))S.HD_VERSION=String(v).trim();
     const w=gs&&gs[WHATS_NEW_SETTING];
-    if(w&&String(w).length>2){const arr=JSON.parse(String(w));if(Array.isArray(arr))S.WHATS_NEW=arr;}
+    if(w&&String(w).length>2){const arr=JSON.parse(String(w));if(Array.isArray(arr)){
+      // Merge cloud + local by timestamp so nothing saved locally is ever lost; then heal the cloud.
+      const merged=(arr.concat(S.WHATS_NEW||[])).filter(e=>e&&e.at);
+      const seen=new Set();const uniq=[];
+      merged.sort((a,b)=>new Date(b.at)-new Date(a.at));
+      merged.forEach(e=>{const k=String(e.at)+'|'+String(e.v||'')+'|'+String(e.summary||'');if(!seen.has(k)){seen.add(k);uniq.push(e)}});
+      S.WHATS_NEW=uniq.slice(0,WHATS_NEW_MAX);
+      const cloudHasAll=uniq.every(e=>arr.indexOf(e)>=0||arr.some(x=>String(x.at)===String(e.at)&&String(x.summary||'')===String(e.summary||'')));
+      if(!cloudHasAll){try{await sb.upSet({[HD_VERSION_SETTING]:S.HD_VERSION,[WHATS_NEW_SETTING]:JSON.stringify(S.WHATS_NEW)},null);}catch(_){}}
+    }}
+    else if((S.WHATS_NEW||[]).length){ // no cloud row yet but we have local history → publish it
+      try{await sb.upSet({[HD_VERSION_SETTING]:S.HD_VERSION,[WHATS_NEW_SETTING]:JSON.stringify(S.WHATS_NEW)},null);}catch(_){}
+    }
     // 🆕 Admin-only change log (shown in the admin panel's What's New pane only)
     if(!Array.isArray(S.ADMIN_LOG)){ try{ const ll=localStorage.getItem(ADMIN_LOG_SETTING); if(ll){const arr=JSON.parse(ll);if(Array.isArray(arr))S.ADMIN_LOG=arr;} }catch(e){} }
     const al=gs&&gs[ADMIN_LOG_SETTING];
     if(al&&String(al).length>2){const arr=JSON.parse(String(al));if(Array.isArray(arr))S.ADMIN_LOG=arr;}
   }catch(e){}
   refreshHdVersionBadges();renderWhatsNew();renderAdminLog();
+}
+// 🆕 HD1.3 FIX: one-time bootstrap — if both local AND cloud histories are empty (fresh device or a
+// previously lost row), seed the newest release notes so the "What's New" area shows up on the home
+// screen immediately instead of staying hidden until the next card edit. Guarded by a flag + the
+// merge logic above, so it never overwrites real history and runs only once per device.
+async function ensureWhatsNewSeeded(){
+  try{
+    if((S.WHATS_NEW||[]).length)return;
+    if(localStorage.getItem(WHATS_NEW_SEED_FLAG)==='1')return;
+    localStorage.setItem(WHATS_NEW_SEED_FLAG,'1');
+    const now=Date.now();const iso=m=>new Date(now-m*60000).toISOString();
+    S.WHATS_NEW=[
+      {v:'HD 1.3',panel:'site',name:'',summary:'💐 Finished list fixed: corrupted cloud entries no longer hide finished people; 🆕 What\u2019s New history now syncs across devices',at:iso(0)},
+      {v:'HD 1.2',panel:'site',name:'',summary:'Due-but-still-present approved people auto-move onto the 💐 Finished ledger',at:iso(240)},
+      {v:'HD 1.1',panel:'site',name:'',summary:'Cloud finished ledger pulls on every repaint; “awaiting finish” flags added',at:iso(480)},
+      {v:'HD 1.0',panel:'site',name:'',summary:'💐 Finished permanent three-copy cloud ledger (HD0.6) with self-healing setup',at:iso(720)}
+    ].slice(0,WHATS_NEW_MAX);
+    try{await sb.upSet({[HD_VERSION_SETTING]:S.HD_VERSION,[WHATS_NEW_SETTING]:JSON.stringify(S.WHATS_NEW)},null);}catch(_){}
+    try{localStorage.setItem(WHATS_NEW_SETTING,JSON.stringify(S.WHATS_NEW));}catch(_){}
+    renderWhatsNew();
+  }catch(e){}
 }
 async function recordWhatsNew(panel,personName,summaryText){
   // Bump version ONLY for real changes in the card / requester / guest panels.
@@ -4229,7 +4272,10 @@ function getFinishedPeople(){
   return lsGetArr(FINISHED_KEY).filter(p=>p&&p.slug&&!p.deleted);
 }
 function clearFinishedPeople(){try{localStorage.removeItem(FINISHED_KEY)}catch(e){}}
-// mergeTwoListsRaw: dedupe by slug; deleted:true always wins; earliest wiped_at wins; newest-first; cap 400
+// mergeTwoListsRaw: dedupe by slug; a REAL tombstone (deleted:true WITH a wiped_at timestamp) wins;
+// "ghost" tombstones (deleted:true but wiped_at=null — created when an incomplete ledger entry was
+// pushed before its data arrived) NEVER override live entries; earliest wiped_at wins; newest-first; cap 400
+function isRealTombstone(e){return !!(e&&e.deleted===true&&e.wiped_at)}
 function mergeTwoListsRaw(a,b){
   const map={};
   const put=e=>{
@@ -4237,6 +4283,9 @@ function mergeTwoListsRaw(a,b){
     const k=String(e.slug).toLowerCase();
     const old=map[k];
     if(!old){map[k]=e;return}
+    // ghost tombstone loses against any live entry (in either direction)
+    if(old.deleted&&!isRealTombstone(old)&&!e.deleted){map[k]=Object.assign({},e,{wiped_at:e.wiped_at||null});return}
+    if(e.deleted&&!isRealTombstone(e)&&!old.deleted){map[k]=Object.assign({},old,{wiped_at:old.wiped_at||null});return}
     if(old.deleted&&!e.deleted){map[k]=old;return}
     if(e.deleted&&!old.deleted){map[k]=Object.assign({},e,{wiped_at:earliestWiped(old,e)});return}
     map[k]=Object.assign({},old,e,{wiped_at:earliestWiped(old,e)});
@@ -4247,7 +4296,7 @@ function mergeTwoListsRaw(a,b){
   return arr.slice(0,400);
 }
 function earliestWiped(old,e){
-  const t=o=>{const d=o&&o.wiped_at?new Date(o.wiped_at).getTime():0;return isNaN(t)?0:(d||0)};
+  const t=o=>{const d=o&&o.wiped_at?new Date(o.wiped_at).getTime():0;return isNaN(d)?0:(d||0)};
   const a=t(old),b=t(e);
   if(!a)return b?e.wiped_at:null;
   if(!b)return old.wiped_at;
@@ -4272,6 +4321,11 @@ function mergeFinishedEntry(p){
   if(!p||!p.slug)return false;
   const s=String(p.slug).toLowerCase();
   if(p.deleted){ // route deletions to purged tombstones, drop live copy
+    // 💐 HD1.3 FIX: a tombstone with wiped_at=null is NOT a real admin "Remove from home screen"
+    // (removeFinishedPerson always stamps a real timestamp). It only appears when an incomplete
+    // ledger entry was pushed before its data arrived — such ghosts used to purge the whole
+    // finished list silently, so no finished people ever showed on the home screen. Ignore them.
+    if(!p.wiped_at)return false;
     rememberPurged(Object.assign(purgedLedgerEntry(s,p.wiped_at),{display_name:p.display_name||''}));
     const list=lsGetArr(FINISHED_KEY).filter(x=>String(x.slug||'').toLowerCase()!==s);
     lsSetArr(FINISHED_KEY,list.filter(x=>!x.deleted),200);
@@ -4304,8 +4358,8 @@ async function doPushFinishedLedger(){
     const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
     const remote=[...parse(jsonTxt),...parse(setTxt),...parse(tblTxt)];
     const local=lsGetArr(FINISHED_KEY);
-    const tombs=getPurgedList();
-    const merged=mergeTwoListsRaw(mergeTwoListsRaw(local,remote),tombs); // tombstones appended LAST → win
+    const tombs=getPurgedList().filter(isRealTombstone); // 💐 HD1.3: never re-publish ghost tombstones to the cloud
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw(local,remote.filter(e=>!e||!e.deleted||isRealTombstone(e))),tombs); // tombstones appended LAST → win
     const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
     lsSetArr(FINISHED_KEY,merged.filter(x=>!x.deleted),200);
     await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
@@ -4326,7 +4380,24 @@ async function pullFinishedLedger(){
     let changed=false;
     const before=JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList());
     remote.forEach(p=>{if(p&&p.slug)mergeFinishedEntry(p)});
-    changed=(JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList()))!==before;
+    // 💐 HD1.3 FIX: repair the CLOUD ledger itself. Ghost tombstones (deleted:true with wiped_at=null)
+    // that were pushed by older builds stay in all three copies forever and keep re-purging every device.
+    // Drop them from the remote data, then resurrect any locally-known person a ghost had wrongly purged.
+    const ghostsDropped=remote.some(p=>p&&p.deleted&&!isRealTombstone(p));
+    if(ghostsDropped){
+      const ghostSlugs={};
+      remote.forEach(p=>{if(p&&p.slug&&p.deleted&&!isRealTombstone(p))ghostSlugs[String(p.slug).toLowerCase()]=true});
+      const healed=remote.filter(p=>!(p&&p.deleted&&!isRealTombstone(p)));
+      Object.keys(ghostSlugs).forEach(s=>{
+        forgetPurged(s); // lift the fake tombstone on this device…
+        const rec=getWipedArchive().find(x=>String(x.slug||'').toLowerCase()===s)||
+                  lsGetArr(WIPED_ARCHIVE_KEY).find(x=>String(x.slug||'').toLowerCase()===s);
+        if(rec)mergeFinishedEntry(Object.assign({},rec,{deleted:false})); // …and bring the person back
+        else if(healed.some(x=>!x.deleted&&String(x.slug||'').toLowerCase()===s))mergeFinishedEntry(healed.find(x=>String(x.slug||'').toLowerCase()===s));
+      });
+      pushFinishedLedger(); // republish the cleaned ledger to all three cloud copies
+    }
+    changed=ghostsDropped||(JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList()))!==before;
     return changed;
   }catch(e){return false}
 }
@@ -4371,7 +4442,10 @@ function addFinishedPerson(person){
 async function removeFinishedPerson(slug){
   const s=String(slug||'').toLowerCase();
   if(!s)return;
-  const existing=getFinishedPeople().find(x=>String(x.slug||'').toLowerCase()===s);
+  const existing=getFinishedPeople().find(x=>String(x.slug||'').toLowerCase()===s)
+    ||getPurgedList().find(x=>String(x.slug||'').toLowerCase()===s);
+  // 💐 HD1.3 FIX: a real admin removal ALWAYS stamps wiped_at — the timestamp is what tells
+  // genuine tombstones apart from corrupted "ghost" entries (deleted:true, wiped_at:null).
   const tomb=purgedLedgerEntry(s,(existing&&existing.wiped_at)||new Date().toISOString());
   if(existing)tomb.display_name=existing.display_name||'';
   rememberPurged(tomb);
@@ -4380,7 +4454,10 @@ async function removeFinishedPerson(slug){
   try{
     const [jsonTxt,setTxt,tblTxt]=await Promise.all([sb.sbGetFinishedJson(),sb.sbGetFinishedFromSettings(),sb.sbGetFinishedFromTable()]);
     const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
-    const merged=mergeTwoListsRaw(mergeTwoListsRaw([...parse(tblTxt),...parse(setTxt),...parse(jsonTxt),...lsGetArr(FINISHED_KEY)],[tomb]),[tomb]);
+    // 💐 HD1.3: strip ghost tombstones from the remote copies while we're writing the real one
+    const remoteAll=[...parse(tblTxt),...parse(setTxt),...parse(jsonTxt)];
+    const remoteClean=remoteAll.filter(e=>e&&!(e.deleted&&!isRealTombstone(e)));
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw([...remoteClean,...lsGetArr(FINISHED_KEY)],[tomb]),[tomb]);
     const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
     await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
   }catch(e){console.warn('[finished-ledger] remove push failed:',e&&e.message)}
@@ -5162,6 +5239,9 @@ async function boot(){
   S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled']),adminSlug:(gs&&gs['shared__admin_slug'])||DEFAULT_ADMIN_SLUG};
   // 🆕 HD1.3: pull the shared version + What's New history from the cloud after first paint.
   try{ await pullWhatsNew(); }catch(e){}
+  // 🆕 HD1.3 FIX: if both local and cloud histories are still empty, seed the release notes so
+  // the "What's New" area is visible on the home screen right away (runs once per device).
+  try{ await ensureWhatsNewSeeded(); }catch(e){}
   if(window.buildHome)window.buildHome();
   if(window.updateFinishedBadge)updateFinishedBadge();
   // Background maintenance (non-blocking): sync ledger + due people, repaint only when changed
