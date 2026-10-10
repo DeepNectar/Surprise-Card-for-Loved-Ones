@@ -270,6 +270,11 @@ setInterval(waFlushPending,4000);
 const S=window.__PAGE_STATE__||(window.__PAGE_STATE__={});
 S.PEOPLE=S.PEOPLE||[];
 S.CURR=S.CURR||{texts:{},textsByLang:{en:{},gu:{},hi:{}},shared:{},gifts:[],story:[],events:[],voice:[],video:[],pins:[],media:[]};
+// ===== 🆕 HD 1.3 — VERSION + WHAT'S NEW =====
+// Version starts at HD 1.0 and bumps on EVERY change saved from the card / requester / guest panels:
+// 1.0 → 1.2 → 1.3 … 1.9 → 2.0 (minor step .1, but after .9 the major version increments and minor resets to 0).
+S.HD_VERSION=S.HD_VERSION||'HD 1.0';
+S.WHATS_NEW=S.WHATS_NEW||[];
 S.CURRENT_PERSON=S.CURRENT_PERSON||null;
 S.ADMIN_MODE=S.ADMIN_MODE||false;
 S.PREVIEW_MODE=S.PREVIEW_MODE||false;
@@ -739,6 +744,139 @@ async function triggerAdminPrompt(){
   if(!enabled){ return; }
   openAdminLoginFull();
 }
+/* ============================================================================
+   🆕 HD 1.3 — VERSION TRACKING + WHAT'S NEW
+   The version starts at HD 1.0 and bumps on EVERY change saved from the card,
+   requester or guest panels: 1.0 → 1.2 → 1.3 … 1.9 → 2.0 → 2.2 … (after .9 the
+   major number goes up and the minor resets to 0). Only content/functional
+   changes are recorded ("what changed" for users) — never code-change notes.
+   Storage: settings row 'shared__hd_version' + 'shared__whats_new' (global) so
+   every visitor's home screen and the admin panel show the same history.
+   ==========================================================================*/
+const HD_VERSION_SETTING='shared__hd_version';
+const WHATS_NEW_SETTING='shared__whats_new';
+const WHATS_NEW_MAX=60; // keep the newest 60 entries in the cloud
+
+function bumpHdVersion(cur){
+  const m=/^HD\s*(\d+)\.(\d+)$/i.exec(String(cur||'').trim());
+  if(!m)return 'HD 1.2'; // first change after HD 1.0 → HD 1.2 (skips 1.1 per spec)
+  let major=parseInt(m[1],10),minor=parseInt(m[2],10);
+  if(minor>=9){major+=1;minor=0;}else{minor+=1;}
+  return 'HD '+major+'.'+minor;
+}
+function hdVerToNum(v){const m=/^HD\s*(\d+)\.(\d+)$/i.exec(String(v||'').trim());return m?(parseInt(m[1],10)*100+parseInt(m[2],10)):100;}
+function hnEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function hnPanelLabel(p){return p==='guest'?'✍️ Guest':(p==='requester'?'👤 Requester':'💌 Card');}
+function hnCountChanges(a,b){let n=0;const keys=new Set([...Object.keys(a||{}),...Object.keys(b||{})]);keys.forEach(k=>{if(String((a||{})[k]==null?'':a[k])!==String((b||{})[k]==null?'':b[k]))n++;});return n;}
+// Build a human-friendly summary of what actually changed (content only — no code details).
+function buildChangeSummary(personName,prev,next){
+  prev=prev||{};next=next||{};
+  const parts=[];
+  const cnt=(arr)=>(arr||[]).filter(r=>r&&(r.drive_id||r.src||r.title||r.message||r.label||r.body||r.audio_url||r.video_url||r.lat)).length;
+  const listDiff=(label,a,b)=>{const x=cnt(a),y=cnt(b);if(x===y)return;if(y>x)parts.push('+'+(y-x)+' '+label);else parts.push('−'+(x-y)+' '+label);};
+  listDiff('photo/video',prev.media,next.media);
+  listDiff('private photo/video',prev.privateMedia,next.privateMedia);
+  listDiff('gift box',prev.gifts,next.gifts);
+  listDiff('story page',prev.story,next.story);
+  listDiff('countdown event',prev.events,next.events);
+  listDiff('voice message',prev.voice,next.voice);
+  listDiff('video message',prev.video,next.video);
+  listDiff('map pin',prev.pins,next.pins);
+  const tc=hnCountChanges(prev.texts&&prev.texts.en,next.texts&&next.texts.en)+hnCountChanges(prev.texts&&prev.texts.gu,next.texts&&next.texts.gu)+hnCountChanges(prev.texts&&prev.texts.hi,next.texts&&next.texts.hi);
+  if(tc)parts.push(tc+' text update'+(tc>1?'s':''));
+  if(prev.theme&&next.theme&&prev.theme!==next.theme)parts.push('theme → '+next.theme);
+  if(prev.shared&&next.shared){
+    const s=hnCountChanges(prev.shared,next.shared);
+    if(s)parts.push(s+' setting'+(s>1?'s':'')+' updated');
+  }
+  if(prev.person&&next.person&&String(prev.person.display_name||'')!==String(next.person.display_name||''))parts.push('name → "'+next.person.display_name+'"');
+  const who=personName?('For "'+personName+'": '):'';
+  return who+(parts.length?parts.join(', '):'card updated');
+}
+async function pullWhatsNew(){
+  try{
+    const gs=await sb.getSet(null);
+    const v=gs&&gs[HD_VERSION_SETTING];if(v&&/^HD\s*\d+\.\d+$/i.test(String(v).trim()))S.HD_VERSION=String(v).trim();
+    const w=gs&&gs[WHATS_NEW_SETTING];
+    if(w&&String(w).length>2){const arr=JSON.parse(String(w));if(Array.isArray(arr))S.WHATS_NEW=arr;}
+  }catch(e){}
+  refreshHdVersionBadges();renderWhatsNew();
+}
+async function recordWhatsNew(panel,personName,summaryText){
+  // Bump version ONLY for real changes in the card / requester / guest panels.
+  const nextVer=bumpHdVersion(S.HD_VERSION);
+  const entry={v:nextVer,panel:panel,name:String(personName||'').slice(0,80),summary:String(summaryText||'').slice(0,300),at:new Date().toISOString()};
+  S.WHATS_NEW=[entry].concat(S.WHATS_NEW||[]).slice(0,WHATS_NEW_MAX);
+  S.HD_VERSION=nextVer;
+  try{
+    await sb.upSet({[HD_VERSION_SETTING]:nextVer,[WHATS_NEW_SETTING]:JSON.stringify(S.WHATS_NEW)},null);
+  }catch(e){console.warn('[whatsnew] cloud save failed:',e&&e.message);}
+  try{localStorage.setItem(HD_VERSION_SETTING,nextVer);localStorage.setItem(WHATS_NEW_SETTING,JSON.stringify(S.WHATS_NEW));}catch(_){}
+  refreshHdVersionBadges();renderWhatsNew();renderAdminWhatsNew();
+}
+function whatsNewSnapshot(){
+  // Snapshot of the CURRENT in-memory state of the person being edited — used to diff against before/after saves.
+  const c=S.CURR||{};
+  return {
+    person:{display_name:(S.CURRENT_PERSON&&(S.CURRENT_PERSON.display_name||S.CURRENT_PERSON.slug))||''},
+    theme:(c.shared&&c.shared.theme)||'',
+    texts:c.textsByLang||{en:{},gu:{},hi:{}},
+    shared:c.shared||{},
+    gifts:c.gifts||[],story:c.story||[],events:c.events||[],voice:c.voice||[],video:c.video||[],pins:c.pins||[],
+    media:(c.media||[]),privateMedia:[],
+  };
+}
+function refreshHdVersionBadges(){
+  const v=S.HD_VERSION||'HD 1.0';
+  ['hdVersionBadge','homeWhatsNewVer','adminHdVersionBadge'].forEach(id=>{const el=$(id);if(el)el.textContent=v;});
+}
+function renderWhatsNew(){
+  const wrap=$('homeWhatsNew'),list=$('homeWhatsNewList'),cntEl=$('homeWhatsNewCount');
+  if(!wrap||!list)return;
+  const items=(S.WHATS_NEW||[]).slice(0,12);
+  if(!items.length){wrap.style.display='none';return;}
+  wrap.style.display='block';
+  if(cntEl)cntEl.textContent=String((S.WHATS_NEW||[]).length);
+  list.innerHTML=items.map(it=>{
+    const when=it.at?(new Date(it.at).toLocaleDateString()+', '+new Date(it.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})):'';
+    const tagCls=it.panel==='guest'?'hn-tag guest':(it.panel==='requester'?'hn-tag requester':'hn-tag');
+    return '<div class="hn-item"><div class="hn-line1"><span class="'+tagCls+'">'+hnEsc(hnPanelLabel(it.panel))+'</span><span>'+hnEsc(it.v||'')+'</span>'+(it.name?('<span>· '+hnEsc(it.name)+'</span>'):'')+'<span class="hn-when">'+hnEsc(when)+'</span></div><div class="hn-sum">'+hnEsc(it.summary||'')+'</div></div>';
+  }).join('');
+}
+function renderAdminWhatsNew(){
+  const list=$('adminWhatsNewList');if(!list)return;
+  const items=S.WHATS_NEW||[];
+  if(!items.length){list.innerHTML='<div class="hn-empty">No changes recorded yet. Every save from the card, requester or guest panel will appear here.</div>';return;}
+  list.innerHTML=items.map(it=>{
+    const when=it.at?new Date(it.at).toLocaleString():'';
+    const tagCls=it.panel==='guest'?'hn-tag guest':(it.panel==='requester'?'hn-tag requester':'hn-tag');
+    return '<div class="hn-item"><div class="hn-line1"><span class="'+tagCls+'">'+hnEsc(hnPanelLabel(it.panel))+'</span><span>'+hnEsc(it.v||'')+'</span>'+(it.name?('<span>· '+hnEsc(it.name)+'</span>'):'')+'<span class="hn-when">'+hnEsc(when)+'</span></div><div class="hn-sum">'+hnEsc(it.summary||'')+'</div></div>';
+  }).join('');
+}
+window.renderAdminWhatsNew=renderAdminWhatsNew;
+window.recordWhatsNew=recordWhatsNew;
+window.whatsNewSnapshot=whatsNewSnapshot;
+window.buildChangeSummary=buildChangeSummary;
+// 🆕 HD1.3: take a "before" snapshot, run the real save, then record only if something actually changed.
+// The version bumps ONLY on changes made in the card / requester / guest panels (never on no-op saves).
+async function withWhatsNew(panel,personName,prevSnap,saveFn){
+  try{
+    await saveFn();
+    let nextSnap=null;
+    if(prevSnap&&prevSnap.__cmp){ try{nextSnap=await prevSnap.__cmp();}catch(e){nextSnap=null;} }
+    let changed=true,sum='';
+    if(nextSnap){ sum=buildChangeSummary(personName,prevSnap,nextSnap); changed=(sum.replace(/^For ".*?":\s*/,'')!=='card updated'); }
+    else{ sum=String(personName||'').trim()?('For "'+personName+'": card updated'):'card updated'; }
+    if(changed)await recordWhatsNew(panel,personName,sum);
+  }catch(e){ throw e; }
+}
+window.withWhatsNew=withWhatsNew;
+(function wireHomeWhatsNew(){
+  const wrap=$('homeWhatsNew'),head=$('homeWhatsNewHead');
+  if(!wrap||!head)return;
+  head.onclick=()=>{wrap.classList.toggle('collapsed');};
+})();
+
 window.buildHome=function(){
   const g=$('homeGrid');if(!g)return;g.innerHTML='';
   // R3: finished people are removed from the Active grid immediately (homeVisiblePeople filter)
@@ -784,9 +922,11 @@ $('homeReviewsMoreBtn').onclick=()=>{ S.HOME_REVIEW_LIMIT+=10; renderHomeReviews
   const btn=$('homeIntroToggle');
   if(!box||!btn)return;
   const KEY='homeIntroCollapsed';
-  try{
-    if(localStorage.getItem(KEY)==='1'){ box.classList.add('collapsed'); btn.textContent='Show more 👇'; }
-  }catch(e){}
+  // 🆕 HD1.3: the intro must ALWAYS be collapsed when the home screen loads —
+  // it only expands when the user explicitly taps the toggle button.
+  box.classList.add('collapsed');
+  btn.textContent='Show more 👇';
+  try{ localStorage.setItem(KEY,'1'); }catch(e){}
   btn.onclick=()=>{
     const isCollapsed=box.classList.toggle('collapsed');
     btn.textContent=isCollapsed?'Show more 👇':'Hide 👆';
@@ -3042,6 +3182,13 @@ function renderAdminMedia(){ const w=$('mediaRepeater');if(!w)return;w.innerHTML
 $('addMediaRow').onclick=()=>{S.CURR.media=S.CURR.media||[];S.CURR.media.push({type:'photo',drive_id:'',src:'',title:''});renderAdminMedia()};
 
 async function saveAdminAll(){
+  // 🆕 HD1.3: capture the cloud "before" state so we can record WHAT changed (content only).
+  const __wnPrevPid=S.CURRENT_PERSON&&S.CURRENT_PERSON.id;
+  const __wnPrevName=(S.CURRENT_PERSON&&(S.CURRENT_PERSON.display_name||S.CURRENT_PERSON.slug))||'';
+  const __wnPrev=__wnPrevPid?(await sb.getSet(__wnPrevPid)):{};
+  const __wnPrevLists={};
+  if(__wnPrevPid){ try{ __wnPrevLists.gifts=await sb.rows(T_GIFTS,__wnPrevPid);__wnPrevLists.story=await sb.rows(T_STORY,__wnPrevPid);__wnPrevLists.events=await sb.rows(T_EVENTS,__wnPrevPid);__wnPrevLists.voice=await sb.rows(T_VOICE,__wnPrevPid);__wnPrevLists.video=await sb.rows(T_VIDEO,__wnPrevPid);__wnPrevLists.pins=await sb.rows(T_PINS,__wnPrevPid);__wnPrevLists.media=await sb.rows(T_MEDIA,__wnPrevPid);}catch(e){} }
+  const __wnPrevPeople=(await sb.people())||[];
   saveAdminTextsFromFields(S.ADMIN_EDIT_LANG);
   readAdminFields();
   const sh=S.CURR.shared||{};
