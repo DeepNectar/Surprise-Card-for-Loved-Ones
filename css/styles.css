@@ -413,6 +413,7 @@ h1.card-title{font-size:2.4rem;font-weight:700;font-style:italic;margin-top:.25r
 .hn-item .hn-tag{font-size:.6rem;font-weight:900;padding:.08rem .45rem;border-radius:40px;color:#fff;background:#2a5fd1;text-transform:uppercase;letter-spacing:.5px;}
 .hn-item .hn-tag.guest{background:#8e44ad}
 .hn-item .hn-tag.requester{background:#0a7a3d}
+.hn-item .hn-tag.admin{background:#b7791f}
 .hn-item .hn-when{margin-left:auto;font-size:.62rem;color:var(--c-text-muted);font-weight:700}
 .hn-item .hn-sum{font-size:.8rem;color:var(--c-text);line-height:1.5;margin-top:.2rem;}
 .hn-empty{padding:.6rem;color:var(--c-text-muted);font-style:italic;}
