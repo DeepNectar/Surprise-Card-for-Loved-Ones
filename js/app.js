@@ -4,6 +4,10 @@
 const SUPABASE_URL='https://ueuxnkrvvnvldfwgiyqy.supabase.co';
 const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVldXhua3J2dm52bGRmd2dpeXF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk3MjM0ODUsImV4cCI6MjEwNTI5OTQ4NX0.DwDSWdnVK1-eWLvSuXpsf22PLtMVq_ZJ-1Kq39AoOSI';
 const T_PEOPLE='people',T_SETTINGS='settings',T_MEDIA='media',T_GIFTS='gifts',T_STORY='story_pages',T_EVENTS='event_countdowns',T_VOICE='voice_messages',T_VIDEO='video_messages',T_PINS='map_pins',T_GUEST='guest_submissions',T_UPLOADS='uploads',T_REVIEWS='reviews';
+// 💐 Finished ledger constants (HD0.6)
+const T_LEDGER='finished_ledger';
+const FINISHED_BUCKET=window.FINISHED_BUCKET||'site-ledger';
+const FINISHED_FILE='finished_people.json';
 const FALLBACK_ADMIN_PW='Deepnectar@@1617@@';
 const PUBLIC_CARD_LINK='http://vercel.com/';
 const DEFAULT_TZ='Asia/Dubai';
@@ -137,19 +141,6 @@ function dedupeMedia(rows){
     seen.add(key);out.push(r);
   });
   return out;
-}
-
-// Split a bulk-paste textarea value into Drive IDs and direct video URLs.
-// Drive ID = token without '/' (and not a URL). Direct link = full URL (kept as-is, may contain commas in query strings).
-function splitBulkMediaTokens(v){
-  const driveIds=[],urls=[];
-  String(v||'').split(/\s+/).forEach(tok=>{
-    tok=tok.trim().replace(/,+$/,'');
-    if(!tok)return;
-    if(/^(https?:\/\/|www\.)/i.test(tok)||tok.includes('/')) urls.push(tok);
-    else driveIds.push(tok.replace(/^,+|,+$| /g,''));
-  });
-  return {driveIds:driveIds.filter(Boolean),urls:urls};
 }
 
 function last4Digits(s){
@@ -312,7 +303,26 @@ const sb={
   },
   async upd(table,id,patch){const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`,{method:'PATCH',headers:this.h(),body:JSON.stringify(patch)});if(!r.ok){const t=await r.text();throw new Error('update '+table+' '+t)}return r.json()},
   async wipe(table,pid){try{await fetch(`${SUPABASE_URL}/rest/v1/${table}?person_id=eq.${pid}`,{method:'DELETE',headers:this.hd()})}catch(e){}},
-  async wipeAll(table){try{await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=gt.0`,{method:'DELETE',headers:this.hd()})}catch(e){}},
+  // HD0.6: finished_ledger is the permanent cloud source of truth — no wipe routine may ever clear it.
+  async wipeAll(table){if(table===T_LEDGER){console.warn('[wipeAll] refused: finished_ledger is protected');return;}try{await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=gt.0`,{method:'DELETE',headers:this.hd()})}catch(e){}},
+  async delGuest(id){try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_GUEST}?id=eq.${id}`,{method:'DELETE',headers:this.hd()});if(!r.ok)throw new Error('delete guest '+r.status)}catch(e){throw e instanceof Error&&/delete guest/.test(e.message)?e:new Error('delete guest '+id+': '+(e.message||'network'))}},
+  // ===== 💐 Finished ledger — three redundant cloud copies (HD0.6) =====
+  // Copy 1: Storage object site-ledger/finished_people.json (survives every table wipe)
+  async sbGetFinishedJson(){try{const u=`${SUPABASE_URL}/storage/v1/object/public/${FINISHED_BUCKET}/${FINISHED_FILE}?cb=${Date.now()}`;const r=await fetch(u,{cache:'no-store'});if(!r.ok)return null;return await r.text()}catch(e){return null}},
+  async sbPutFinishedJson(text){try{const u=`${SUPABASE_URL}/storage/v1/object/${FINISHED_BUCKET}/${FINISHED_FILE}`;const r=await fetch(u,{method:'POST',headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY,'Content-Type':'application/json','x-upsert':'true'},body:text});return r.ok}catch(e){return false}},
+  // Copy 2: settings row key='shared__finished_ledger' (works even if bucket/RLS was never created)
+  async sbGetFinishedFromSettings(){try{const gs=await this.getSet(null);const v=gs&&gs[FINISHED_LEDGER_SETTING];return (v&&String(v).length>2)?String(v):null}catch(e){return null}},
+  async sbPutFinishedToSettings(text){
+    try{await this.upSet({[FINISHED_LEDGER_SETTING]:text},null);return true}
+    catch(e){
+      // PATCH fallback, then INSERT fallback
+      try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_SETTINGS}?key=eq.${FINISHED_LEDGER_SETTING}&person_id=is.null`,{method:'PATCH',headers:this.h(),body:JSON.stringify({value:text})});if(r.ok)return true}catch(e2){}
+      try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_SETTINGS}`,{method:'POST',headers:this.h(),body:JSON.stringify({key:FINISHED_LEDGER_SETTING,value:text,person_id:null})});return r.ok}catch(e3){return false}
+    }
+  },
+  // Copy 3: public.finished_ledger single-row table (id=1) — permanent home, guarded above
+  async sbGetFinishedFromTable(){try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_LEDGER}?select=value&id=eq.1`,{headers:this.h(),cache:'no-store'});if(!r.ok)return null;const rows=await r.json();return (rows&&rows[0]&&rows[0].value!=null)?String(rows[0].value):null}catch(e){return null}},
+  async sbPutFinishedToTable(text){try{await sbEnsureLedgerTable();const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_LEDGER}?id=eq.1`,{method:'PATCH',headers:this.h(),body:JSON.stringify({value:text,updated_at:new Date().toISOString()})});if(r.ok)return true;const r2=await fetch(`${SUPABASE_URL}/rest/v1/${T_LEDGER}`,{method:'POST',headers:Object.assign({},this.h(),{'Prefer':'resolution=merge-duplicates'}),body:JSON.stringify({id:1,value:text})});return r2.ok}catch(e){return false}},
   async guests(){try{const r=await fetch(`${SUPABASE_URL}/rest/v1/${T_GUEST}?select=*&order=created_at.desc`,{headers:this.h(),cache:'no-store'});if(!r.ok)return[];return r.json()}catch(e){return[]}},
   async updGuest(id,patch){return this.upd(T_GUEST,id,patch)},
   async wipeExpired(){try{const r=await fetch(`${SUPABASE_URL}/rest/v1/rpc/wipe_expired_people`,{method:'POST',headers:this.h(),body:'{}'});if(!r.ok)return 0;const n=await r.json();return n||0}catch(e){return 0}},
@@ -344,17 +354,98 @@ async function wipeOnePerson(pid){
 async function checkWipe(){
   try{
     await sb.wipeExpired();
-    const all=await sb.people();
-    if(!all||!all.length)return;
-    const now=Date.now();const toWipe=[];
-    for(const p of all){
-      if(!p.wipe_iso)continue;
-      const d=new Date(p.wipe_iso);if(isNaN(d.getTime()))continue;
-      if(now>=d.getTime())toWipe.push(p.id);
-    }
-    if(toWipe.length)for(const id of toWipe)await wipeOnePerson(id);
+    const all=await sb.people()||[];
+    // HD1.1: pull the cloud ledger + seed due-but-still-present people before repainting
+    try{ await pullFinishedLedger(); }catch(e){}
+    const nowMs=Date.now();
+    let finishedChanged=false;
+    // ===== HD1.2 — AUTO-MOVE TO FINISHED =====
+    // When a person's scheduled auto-wipe date & time passes, they are moved onto the
+    // 💐 Finished ledger automatically and appear on the home screen 💐 Finished section
+    // (and in the admin 💐 Finished tab) without any admin action.
+    // People already deleted from `people` by the server-side wipe_expired_people RPC are
+    // recovered from their linked guest submission rows so nothing is ever missed.
+    let gRows=null;
+    const slugOfRow=r=>{const pl=r.payload||{};const prop=pl.person_proposal||{};return String(r.approved_login_id||prop.slug||r.target_person_slug||'').toLowerCase()};
+    const duePeople=all.filter(p=>{
+      if(!p.wipe_iso)return false;
+      const d=new Date(p.wipe_iso);
+      return !isNaN(d.getTime())&&d.getTime()<=nowMs;
+    });
+    duePeople.forEach(p=>{
+      if(!p.slug)return;
+      if(isFinishedSlug(p.slug)||isPurged(p.slug))return;
+      if(addFinishedPerson({slug:String(p.slug),display_name:p.display_name,birthday:p.birthday||null,
+        requester_name:p.requester_name||'',requester_relation:p.requester_relation||'',requester_whatsapp:p.requester_whatsapp||'',
+        finished_manually:false,wiped_at:p.wipe_iso}))finishedChanged=true;
+    });
+    try{
+      gRows=(await sb.guests())||[];
+      const liveSlugs={};all.forEach(p=>{if(p.slug)liveSlugs[String(p.slug).toLowerCase()]=true});
+      gRows.filter(r=>r.status==='approved').forEach(r=>{
+        const s=slugOfRow(r);
+        if(!s||liveSlugs[s])return;                       // still live → handled above
+        if(isFinishedSlug(s)||isPurged(s))return;         // already finished or tombstoned
+        const pl=r.payload||{};const prop=pl.person_proposal||{};const gi=pl.guest_info||{};
+        const w=r.wipe_iso||prop.wipe_iso||null;          // scheduled "said" date/time (R4)
+        if(!w)return;
+        const d=new Date(w);
+        if(isNaN(d.getTime())||d.getTime()>nowMs)return;  // auto-wipe not due yet
+        if(addFinishedPerson({id:r.id,slug:s,
+          display_name:prop.display_name||r.target_person_slug||s,
+          birthday:prop.birthday||null,
+          requester_name:gi.name||r.guest_name||'',
+          requester_relation:gi.relation||'',
+          requester_whatsapp:gi.whatsapp||r.guest_whatsapp||'', // kept PRIVATE (R7)
+          finished_manually:false,wiped_at:w}))finishedChanged=true;
+        sb.updGuest(r.id,{status:'finished'}).catch(()=>{}); // R11: leaves ✅ Completed, enters 💐 Finished
+      });
+    }catch(e){}
+    // HD1.2: auto-move every DUE-but-not-yet-finished approved row onto the ledger and flip it
+    // to status='finished' BEFORE wiping — so nobody can slip through between the two passes.
+    const finishRow=r=>{
+      const s=slugOfRow(r);if(!s)return false;
+      if(isFinishedSlug(s)||isPurged(s))return false;
+      const pl=r.payload||{};const prop=pl.person_proposal||{};const gi=pl.guest_info||{};
+      const person=(S.PEOPLE||[]).find(p=>p.id===r.approved_person_id)||(S.PEOPLE||[]).find(p=>String(p.slug||'').toLowerCase()===s);
+      let w=person&&person.wipe_iso?person.wipe_iso:(r.wipe_iso||prop.wipe_iso||null);
+      if(!w){const d0=new Date();w=d0.toISOString()}
+      const d=new Date(w);
+      if(isNaN(d.getTime())||d.getTime()>nowMs)return false;   // not due yet
+      const added=addFinishedPerson({id:r.id,slug:s,
+        display_name:(person&&person.display_name)||prop.display_name||r.target_person_slug||s,
+        birthday:(person&&person.birthday)||prop.birthday||null,
+        requester_name:(person&&person.requester_name)||gi.name||r.guest_name||'',
+        requester_relation:gi.relation||'',
+        requester_whatsapp:(person&&person.requester_whatsapp)||gi.whatsapp||r.guest_whatsapp||'', // kept PRIVATE (R7)
+        finished_manually:false,wiped_at:w});
+      if(added)finishedChanged=true;
+      sb.updGuest(r.id,{status:'finished'}).catch(()=>{});       // R11
+      return true;
+    };
+    try{
+      const aRows=gRows||((await sb.guests())||[]);
+      aRows.filter(r=>r.status==='approved').forEach(finishRow);
+    }catch(e){}
+    // Client-side safety net: wipe expired card data even if the RPC was never installed.
+    if(duePeople.length)for(const p of duePeople)await wipeOnePerson(p.id);
     S.PEOPLE=await sb.people()||[];
-    if(window.buildHome)window.buildHome();
+    // Final sweep: any live person still past their wipe date lands on the ledger too.
+    (S.PEOPLE||[]).forEach(p=>{
+      if(!p.slug||!p.wipe_iso)return;
+      const d=new Date(p.wipe_iso);
+      if(isNaN(d.getTime())||d.getTime()>nowMs)return;
+      if(isFinishedSlug(p.slug)||isPurged(p.slug))return;
+      if(addFinishedPerson({slug:String(p.slug),display_name:p.display_name,birthday:p.birthday||null,
+        requester_name:p.requester_name||'',requester_relation:'',requester_whatsapp:p.requester_whatsapp||'',
+        finished_manually:false,wiped_at:p.wipe_iso}))finishedChanged=true;
+    });
+    try{ if(await syncFinishedFromCloud())finishedChanged=true; }catch(e){}
+    if(finishedChanged){ try{ await pullFinishedLedger(); }catch(e){} } // propagate to all devices/domains
+    if(window.buildHome)window.buildHome();                              // repaints 💐 Finished section too
+    if(window.updateFinishedBadge)updateFinishedBadge();
+    if($('guestCompletedSection')&&$('guestCompletedSection').style.display!=='none')loadGuestHistory();
+    if($('guestFinishedSection')&&$('guestFinishedSection').style.display!=='none')loadAdminFinished();
   }catch(e){}
 }
 
@@ -405,7 +496,8 @@ async function triggerAdminPrompt(){
 }
 window.buildHome=function(){
   const g=$('homeGrid');if(!g)return;g.innerHTML='';
-  const ep=S.PEOPLE.filter(p=>p.enabled!==false);
+  // R3: finished people are removed from the Active grid immediately (homeVisiblePeople filter)
+  const ep=window.homeVisiblePeople();
   ep.forEach(p=>{
     const b=document.createElement('button');b.type='button';b.className='home-btn';
     b.innerHTML=`<span class="home-btn-emoji">💝</span><span>${(p.display_name||p.slug||'Person').replace(/</g,'&lt;')}</span>`;
@@ -414,6 +506,7 @@ window.buildHome=function(){
   const gb=document.createElement('button');gb.type='button';gb.className='home-btn guest';
   gb.innerHTML='<span class="home-btn-emoji">✍️</span><span>Guest</span>';gb.onclick=()=>window.openGuestPanel&&window.openGuestPanel();g.appendChild(gb);
   renderHomeReviews();
+  if(window.renderFinishedSection)window.renderFinishedSection();
 };
 function starsHtml(n){let s='';for(let i=1;i<=5;i++)s+=`<span style="color:${i<=n?'#ffb703':'#ddd'};">★</span>`;return s;}
 function renderHomeReviews(){
@@ -2691,7 +2784,7 @@ async function saveAdminAll(){
 $('adminSave').onclick=async()=>{ const t0=Date.now();window.__showToast('⏳ Saving…'); try{ await saveAdminAll(); window.__showToast('✅ Saved in '+Math.round((Date.now()-t0)/100)/10+'s'); setTimeout(()=>hide($('adminPanel')),300); } catch(e){window.__showToast('❌ '+(e.message||'Save failed'),false);console.error(e)} };
 $('adminSavePreviewBtn').onclick=async()=>{ const t0=Date.now();window.__showToast('⏳ Saving then previewing…'); try{ await saveAdminAll(); const fresh=S.PEOPLE.find(p=>p.id===S.ADMIN_EDIT_PERSON_ID); if(!fresh){window.__showToast('❌ No person selected',false);return} S.CURRENT_PERSON=fresh; await loadPersonIntoState(fresh); hide($('adminPanel'));S.PREVIEW_MODE=true;S.REQUESTER_MODE=false; await showViewerFor(fresh,true); window.__showToast('✅ Saved & previewing ('+Math.round((Date.now()-t0)/100)/10+'s)'); } catch(e){window.__showToast('❌ '+(e.message||'Preview failed'),false);console.error(e)} };
 $('adminPreviewBtn').onclick=async()=>{ if(!S.CURRENT_PERSON){alert('Pick a person first.');return} saveAdminTextsFromFields(S.ADMIN_EDIT_LANG);readAdminFields(); S.CURR.textsByLang=S.CURR.textsByLang||{en:{},gu:{},hi:{}}; ['en','gu','hi'].forEach(L=>{ S.CURR.textsByLang[L]=Object.assign({},S.CURR.textsByLang[L]||{},S.CURRENT_TEXTS_BY_LANG[L]||{}); }); S.CURR_LANG=S.ADMIN_EDIT_LANG||'en';S.CURR.texts=S.CURR.textsByLang[S.CURR_LANG]||{}; const lt=$('langToggle');if(lt){lt.textContent=S.CURR_LANG==='en'?'EN':(S.CURR_LANG==='gu'?'ગુ':'हि');lt.dataset.state=S.CURR_LANG;} hide($('adminPanel'));S.PREVIEW_MODE=true;S.REQUESTER_MODE=false; await showViewerFor(S.CURRENT_PERSON,true); };
-$('adminReset').onclick=async()=>{ if(!confirm('🧹 This deletes ALL people and content from cloud (reviews stay). Continue?'))return; await sb.wipeAll(T_MEDIA);await sb.wipeAll(T_GIFTS);await sb.wipeAll(T_STORY); await sb.wipeAll(T_EVENTS);await sb.wipeAll(T_VOICE);await sb.wipeAll(T_VIDEO); await sb.wipeAll(T_PINS);await sb.wipeAll(T_PEOPLE);await sb.wipeAll(T_SETTINGS); await sb.wipeAll(T_GUEST); try{localStorage.clear()}catch(e){} location.reload(); };
+$('adminReset').onclick=async()=>{ if(!confirm('🧹 This deletes ALL people and content from cloud (reviews + 💐 finished ledger stay). Continue?'))return; await sb.wipeAll(T_MEDIA);await sb.wipeAll(T_GIFTS);await sb.wipeAll(T_STORY); await sb.wipeAll(T_EVENTS);await sb.wipeAll(T_VOICE);await sb.wipeAll(T_VIDEO); await sb.wipeAll(T_PINS);await sb.wipeAll(T_PEOPLE);await sb.wipeAll(T_SETTINGS); await sb.wipeAll(T_GUEST); /* T_LEDGER intentionally never wiped — HD0.6 guard in wipeAll */ try{localStorage.clear()}catch(e){} location.reload(); };
 $('adminPanelClose').onclick=()=>{hide($('adminPanel'));S.ADMIN_MODE=false;};
 $('adminCancel').onclick=()=>{hide($('adminPanel'));S.ADMIN_MODE=false;};
 
@@ -2701,7 +2794,7 @@ document.querySelectorAll('#adminPanel .panel-tab').forEach(tab=>{
     document.querySelectorAll('#adminPanel .admin-pane, #adminPanel .panel-pane').forEach(p=>p.classList.remove('active'));
     tab.classList.add('active');
     const p=$(tab.dataset.pane);if(p)p.classList.add('active');
-    if(tab.dataset.pane==='pane-guests'){loadGuestApprovals();loadGuestHistory();}
+    if(tab.dataset.pane==='pane-guests'){loadGuestApprovals();loadGuestHistory();if(window.bindGuestStatusTabs)bindGuestStatusTabs();if(window.loadAdminFinished)loadAdminFinished();if(window.updateFinishedBadge)updateFinishedBadge();}
     if(tab.dataset.pane==='pane-reviews'){loadReviews();}
     if(tab.dataset.pane==='pane-people'){renderPeopleRepeater();}
   };
@@ -2934,24 +3027,22 @@ $('geAddPinRow').onclick=()=>{GE.pins.push({label:'',lat:'',lng:'',photo_drive_i
 function renderGEMedia(){ const w=$('geMediaRepeater');if(!w)return;w.innerHTML=''; GE.media.forEach((m,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{GE.media[+el.dataset.i][el.dataset.gm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.media.splice(+b.dataset.i,1);renderGEMedia()}}); }
 $('geAddMediaRow').onclick=()=>{GE.media.push({type:'photo',drive_id:'',src:'',title:''});renderGEMedia()};
 $('geBulkAddMedia').onclick=()=>{
-  const v=$('ge_bulkMediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('ge_bulkMediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   const before=GE.media.length;
   ids.forEach(id=>GE.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  urls.forEach(u=>GE.media.push({type:'video',drive_id:'',src:u,title:''}));
-  GE.media=dedupeMedia(GE.media);const removed=(before+ids.length+urls.length)-GE.media.length;
+  GE.media=dedupeMedia(GE.media);const removed=(before+ids.length)-GE.media.length;
   renderGEMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
 function renderGEPrivate(){ const w=$('gePrivateRepeater');if(!w)return;w.innerHTML=''; (GE.privateMedia||[]).forEach((m,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gpm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gpm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gpm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gpm="title" data-i="${i}" value="${stripPrivTitle(m.title).replace(/"/g,'&quot;')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{GE.privateMedia[+el.dataset.i][el.dataset.gpm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.privateMedia.splice(+b.dataset.i,1);renderGEPrivate()}}); }
 $('geAddPrivateRow').onclick=()=>{GE.privateMedia=GE.privateMedia||[];GE.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderGEPrivate()};
 $('geBulkAddPrivate').onclick=()=>{
-  const v=$('ge_bulkPrivateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('ge_bulkPrivateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   GE.privateMedia=GE.privateMedia||[];const before=GE.privateMedia.length;
   ids.forEach(id=>GE.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  urls.forEach(u=>GE.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
-  GE.privateMedia=dedupeMedia(GE.privateMedia);const removed=(before+ids.length+urls.length)-GE.privateMedia.length;
+  GE.privateMedia=dedupeMedia(GE.privateMedia);const removed=(before+ids.length)-GE.privateMedia.length;
   renderGEPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3216,15 +3307,64 @@ async function approveGuestRow(r,overridePassword,skipStatusUpdate){
   }catch(e){ return{ok:false,err:e.message||'Approval failed'}; }
 }
 
+// Selection bar helpers (defined before loadGuestHistory so the empty-state early return can call them)
+window.updateCompletedSelBar=function(){
+  const list=$('guestHistoryList');if(!list)return;
+  const bs=Array.from(list.querySelectorAll('.completed-check'));
+  const selCount=$('completedSelCount'),selAll=$('selectAllCompleted');
+  const n=bs.filter(x=>x.checked).length;
+  if(selCount)selCount.textContent=n+' selected';
+  if(selAll){selAll.checked=bs.length>0&&n===bs.length;selAll.indeterminate=n>0&&n<bs.length;}
+};
+window.updateFinSelBar=function(){
+  const list=$('adminFinishedList');if(!list)return;
+  const bs=Array.from(list.querySelectorAll('.finished-check'));
+  const bar=$('finishedSelectedActions'),cnt=$('finishedSelCount'),btn=$('removeSelectedFromFinished');
+  const n=bs.filter(x=>x.checked).length;
+  if(bar)bar.style.display=n?'':'none';
+  if(cnt)cnt.textContent=n+' selected';
+  if(btn)btn.textContent='🗑️ Remove '+n+' from home screen';
+};
 async function loadGuestHistory(){
   const list=$('guestHistoryList');if(!list)return;
   list.textContent='Loading…';
-  const rows=await sb.guests();
-  const approved=(rows||[]).filter(r=>r.status==='approved');
-  if(!approved.length){list.innerHTML='<div style="padding:.6rem;color:var(--c-text-muted);">No approved submissions yet.</div>';return}
+  // HD1.1: refresh the cloud ledger + people first so "awaiting finish" flags are accurate
+  try{ await pullFinishedLedger(); }catch(e){}
+  try{ S.PEOPLE=await sb.people()||S.PEOPLE; }catch(e){}
+  const rows=(await sb.guests())||[];
+  const approved=rows.filter(r=>r.status==='approved');
+  const nowMs=Date.now();
+  // dueSlugs: every live person whose auto-wipe date has passed
+  const dueSlugs={};
+  (S.PEOPLE||[]).forEach(p=>{
+    if(!p.wipe_iso)return;
+    const d=new Date(p.wipe_iso);
+    if(!isNaN(d.getTime())&&d.getTime()<=nowMs)dueSlugs[String(p.slug||'').toLowerCase()]=true;
+  });
+  const slugOf=r=>{
+    const pl=r.payload||{};const prop=pl.person_proposal||{};
+    return String(r.approved_login_id||prop.slug||r.target_person_slug||'').toLowerCase();
+  };
+  // R2: isDue rules — amber 🕊️ AUTO-WIPED · awaiting 💐 Finished row
+  const isDue=r=>{
+    const slug=slugOf(r);
+    if(isFinishedSlug(slug))return false; // rows already on the Finished ledger are NEVER due
+    if(dueSlugs[slug])return true;
+    const stillExists=(S.PEOPLE||[]).some(p=>String(p.slug||'').toLowerCase()===slug);
+    if(!stillExists){
+      const pl=r.payload||{};const prop=pl.person_proposal||{};
+      const w=r.wipe_iso||prop.wipe_iso||null;
+      if(w){const d=new Date(w);if(!isNaN(d.getTime())&&d.getTime()<=nowMs)return true;}
+    }
+    return false;
+  };
+  // Sort: due (awaiting-finish) rows float to the TOP
+  approved.sort((a,b)=>(isDue(b)?1:0)-(isDue(a)?1:0));
+  if(!approved.length){list.innerHTML='<div style="padding:.6rem;color:var(--c-text-muted);">No completed submissions yet.</div>';updateCompletedSelBar();return}
   list.innerHTML='';
   const esc=s=>String(s==null?'':s).replace(/</g,'&lt;');
   approved.forEach(r=>{
+    const due=isDue(r);
     const pl=r.payload||{};
     const prop=pl.person_proposal||{};
     const gi=pl.guest_info||{};
@@ -3236,12 +3376,14 @@ async function loadGuestHistory(){
     const link=r.approved_share_link||(loginId?PUBLIC_CARD_LINK+'?person='+encodeURIComponent(loginId):PUBLIC_CARD_LINK);
     const sentAt=r.approved_at?new Date(r.approved_at).toLocaleString():'';
     const editPw=makeRequesterEditPassword(gi.name||r.guest_name,gi.whatsapp||r.guest_whatsapp,loginId);
-    const el=document.createElement('div');el.className='repeat-row';
-    el.style.background='linear-gradient(135deg,#f0fff4,#e8f5f0)';
-    el.innerHTML=`<div style="font-size:.85rem;line-height:1.6;">
-      <strong>✅ ${esc(prop.display_name||r.target_person_slug)}</strong>
+    const el=document.createElement('div');el.className='repeat-row guest-row'+(due?' awaiting-finish':'');
+    el.style.background=due?'linear-gradient(135deg,#fff7e0,#ffedc2)':'linear-gradient(135deg,#f0fff4,#e8f5f0)';
+    el.innerHTML=`<label style="position:absolute;top:.55rem;left:.55rem;z-index:2;" title="Select for bulk actions"><input type="checkbox" class="guest-check completed-check" data-id="${r.id}" onclick="event.stopPropagation()"></label>
+    <div style="font-size:.85rem;line-height:1.6;padding-left:1.4rem;">
+      <strong>${due?'🕊️':'✅'} ${esc(prop.display_name||r.target_person_slug)}</strong>${due?' <span class="person-id-pill" style="background:#fff3cd;color:#b26a00;border-color:#b26a00;">AUTO-WIPED · awaiting 💐 Finished</span>':''}
       ${r.approved_person_id?' <span class="person-id-pill">#'+r.approved_person_id+'</span>':''}
       <em style="color:var(--c-text-muted);"> (login id: ${esc(loginId)})</em>
+      ${prop.birthday?'<div style="font-size:.78rem;">🎂 Birthday: '+esc(String(prop.birthday).slice(0,10))+'</div>':''}
       ${created?'<div style="font-size:.75rem;color:var(--c-text-muted);font-style:italic;">Submitted: '+esc(created)+'</div>':''}
       ${sentAt?'<div style="font-size:.75rem;color:var(--c-text-muted);font-style:italic;">Shared at: '+esc(sentAt)+'</div>':''}
       <hr style="border:none;border-top:1px dashed rgba(196,30,58,.25);margin:.4rem 0;">
@@ -3256,8 +3398,10 @@ async function loadGuestHistory(){
       <div><strong>🌐 Link:</strong> <a href="${link}" target="_blank" rel="noopener noreferrer" style="color:#0a4f8f;word-break:break-all;">${link}</a></div>
     </div>
     <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;">
+      <button type="button" class="repeat-add finished-move-btn" data-id="${r.id}" style="background:#8e44ad;">💐 Move to Finished</button>
       <button class="repeat-add reedit-btn" data-id="${r.id}" style="background:#2a5fd1;">✏️ Re-edit submission</button>
       <button class="repeat-add resend-btn" data-id="${r.id}" style="background:linear-gradient(135deg,#25D366,#128C7E);">📲 Re-send credentials</button>
+      <button type="button" class="repeat-add comp-del-btn" data-id="${r.id}" style="background:#c0392b;">🗑️ Delete from database</button>
     </div>`;
     list.appendChild(el);
   });
@@ -3276,8 +3420,553 @@ async function loadGuestHistory(){
       openGuestEditor(r);
     };
   });
+  // per-row Move-to-Finished
+  list.querySelectorAll('.finished-move-btn').forEach(b=>{
+    b.onclick=()=>moveCompletedGuestsToFinished([parseInt(b.dataset.id)]);
+  });
+  // per-row Delete-from-database
+  list.querySelectorAll('.comp-del-btn').forEach(b=>{
+    b.onclick=()=>deleteCompletedGuestsFromDb([parseInt(b.dataset.id)]);
+  });
+  // Selection bar wiring (bound once via dataset._bound — lists re-render often)
+  const boxes=()=>Array.from(list.querySelectorAll('.completed-check'));
+  const selCount=$('completedSelCount'),selAll=$('selectAllCompleted');
+  boxes().forEach(cb=>{cb.onchange=updateCompletedSelBar});
+  if(selAll&&selAll.dataset._bound!=='1'){
+    selAll.dataset._bound='1';
+    selAll.onchange=()=>{boxes().forEach(cb=>{cb.checked=selAll.checked});updateCompletedSelBar()};
+  }
+  const mv=$('moveSelectedToFinished');
+  if(mv&&mv.dataset._bound!=='1'){
+    mv.dataset._bound='1';
+    mv.onclick=()=>{const ids=boxes().filter(x=>x.checked).map(x=>parseInt(x.dataset.id));moveCompletedGuestsToFinished(ids)};
+  }
+  const dl=$('deleteSelectedFromDb');
+  if(dl&&dl.dataset._bound!=='1'){
+    dl.dataset._bound='1';
+    dl.onclick=()=>{const ids=boxes().filter(x=>x.checked).map(x=>parseInt(x.dataset.id));deleteCompletedGuestsFromDb(ids)};
+  }
+  updateCompletedSelBar();
 }
 $('refreshGuestHistory').onclick=loadGuestHistory;
+
+// ===== 💐 FINISHED FEATURE (HD0.5 / HD0.6 / HD1.1) =====
+// Storage keys (§7.1)
+const FINISHED_KEY='surprise_finished_people_v1';        // local mirror of the cloud ledger (cap 200)
+const FINISHED_PURGED_KEY='surprise_finished_purged_v1'; // delete tombstones (cap 400)
+const WIPED_ARCHIVE_KEY='surprise_wiped_archive_v1';     // private archive (cap 500)
+const FINISHED_LEDGER_SETTING='shared__finished_ledger'; // settings-table mirror key
+
+// Self-healing RPC: recreate table/policies/bucket if missing (setup/ledger.sql §5)
+window.LEDGER_SETUP_SQL="-- 💐 Finished Ledger setup (run once in Supabase SQL Editor)\ncreate table if not exists public.finished_ledger(id int primary key default 1, value text, updated_at timestamptz default now());\ninsert into public.finished_ledger(id,value) values(1,'{\"people\":[]}') on conflict do nothing;\nalter table public.finished_ledger enable row level security;\ncreate policy if not exists ledger_read on public.finished_ledger for select using(true) to anon,authenticated;\ncreate policy if not exists ledger_insert on public.finished_ledger for insert with check(true) to anon,authenticated;\ncreate policy if not exists ledger_update on public.finished_ledger for update using(true) with check(true) to anon,authenticated;";
+let _ledgerTableState=null; // tri-state cache: true / false / in-flight Promise
+async function sbEnsureLedgerTable(){
+  if(_ledgerTableState===true)return true;
+  if(_ledgerTableState instanceof Promise)return _ledgerTableState;
+  _ledgerTableState=(async()=>{
+    try{
+      const r=await fetch(`${SUPABASE_URL}/rest/v1/rpc/ensure_finished_ledger_table`,{method:'POST',headers:sb.h(),body:'{}'});
+      _ledgerTableState=r.ok;
+      return r.ok;
+    }catch(e){_ledgerTableState=false;return false}
+  })();
+  return _ledgerTableState;
+}
+
+// §7.3 helpers
+function daysUntilBirthday(birthday){
+  if(!birthday)return null;
+  const b=new Date(String(birthday).slice(0,10)+'T00:00:00');
+  if(isNaN(b.getTime()))return null;
+  const today=new Date();today.setHours(0,0,0,0);
+  let next=new Date(today.getFullYear(),b.getMonth(),b.getDate());
+  if(next<today)next=new Date(today.getFullYear()+1,b.getMonth(),b.getDate());
+  return Math.round((next-today)/86400000);
+}
+function formatBirthdayDate(birthday){
+  if(!birthday)return '';
+  const b=new Date(String(birthday).slice(0,10)+'T00:00:00');
+  if(isNaN(b.getTime()))return '';
+  const today=new Date();today.setHours(0,0,0,0);
+  let next=new Date(today.getFullYear(),b.getMonth(),b.getDate());
+  if(next<today)next=new Date(today.getFullYear()+1,b.getMonth(),b.getDate());
+  try{return next.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}catch(e){return next.toISOString().slice(0,10)}
+}
+function lsGetArr(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch(e){return[]}}
+function lsSetArr(key,arr,cap){try{localStorage.setItem(key,JSON.stringify((arr||[]).slice(0,cap)))}catch(e){}}
+function getPurgedSlugs(){const m={};getPurgedList().forEach(t=>{if(t&&t.slug)m[String(t.slug).toLowerCase()]=t});return m}
+function getPurgedList(){return lsGetArr(FINISHED_PURGED_KEY)}
+function isPurged(slug){const s=String(slug||'').toLowerCase();return !!getPurgedSlugs()[s]}
+function rememberPurged(tomb){
+  const list=getPurgedList().filter(x=>String(x.slug||'').toLowerCase()!==String(tomb.slug||'').toLowerCase());
+  list.unshift(tomb);lsSetArr(FINISHED_PURGED_KEY,list,400);
+}
+function forgetPurged(slug){
+  const s=String(slug||'').toLowerCase();
+  lsSetArr(FINISHED_PURGED_KEY,getPurgedList().filter(x=>String(x.slug||'').toLowerCase()!==s),400);
+}
+function isFinishedSlug(slug){
+  const s=String(slug||'').toLowerCase();
+  if(!s)return false;
+  if(isPurged(s))return false; // R13/R14: purged slugs are NOT finished
+  return getFinishedPeople().some(p=>String(p.slug||'').toLowerCase()===s);
+}
+function isAwaitingFinish(row){
+  if(!row||row.status!=='approved')return false;
+  const pl=row.payload||{};const prop=pl.person_proposal||{};
+  const w=row.wipe_iso||prop.wipe_iso||null;
+  if(!w)return false;
+  const d=new Date(w);if(isNaN(d.getTime()))return false;
+  const slug=String(row.approved_login_id||prop.slug||row.target_person_slug||'').toLowerCase();
+  return d.getTime()<=Date.now()&&!isFinishedSlug(slug);
+}
+function findPersonBySlug(slug){
+  const s=String(slug||'').toLowerCase();
+  const p=(S.PEOPLE||[]).find(x=>String(x.slug||'').toLowerCase()===s);
+  if(p)return p;
+  return getFinishedPeople().find(x=>String(x.slug||'').toLowerCase()===s)||null;
+}
+function getFinishedPeople(){
+  return lsGetArr(FINISHED_KEY).filter(p=>p&&p.slug&&!p.deleted);
+}
+function clearFinishedPeople(){try{localStorage.removeItem(FINISHED_KEY)}catch(e){}}
+// mergeTwoListsRaw: dedupe by slug; deleted:true always wins; earliest wiped_at wins; newest-first; cap 400
+function mergeTwoListsRaw(a,b){
+  const map={};
+  const put=e=>{
+    if(!e||!e.slug)return;
+    const k=String(e.slug).toLowerCase();
+    const old=map[k];
+    if(!old){map[k]=e;return}
+    if(old.deleted&&!e.deleted){map[k]=old;return}
+    if(e.deleted&&!old.deleted){map[k]=Object.assign({},e,{wiped_at:earliestWiped(old,e)});return}
+    map[k]=Object.assign({},old,e,{wiped_at:earliestWiped(old,e)});
+  };
+  (a||[]).forEach(put);(b||[]).forEach(put);
+  const arr=Object.values(map);
+  arr.sort((x,y)=>{const wx=x.wiped_at?new Date(x.wiped_at).getTime():0;const wy=y.wiped_at?new Date(y.wiped_at).getTime():0;return wy-wx});
+  return arr.slice(0,400);
+}
+function earliestWiped(old,e){
+  const t=o=>{const d=o&&o.wiped_at?new Date(o.wiped_at).getTime():0;return isNaN(t)?0:(d||0)};
+  const a=t(old),b=t(e);
+  if(!a)return b?e.wiped_at:null;
+  if(!b)return old.wiped_at;
+  return a<=b?old.wiped_at:e.wiped_at;
+}
+function mergeTwoLists(a,b){return mergeTwoListsRaw(a,b)}
+function purgedLedgerEntry(slug,wiped_at){
+  return {slug:String(slug||''),deleted:true,wiped_at:wiped_at||new Date().toISOString(),display_name:'',birthday:null,requester_name:'',requester_relation:'',requester_whatsapp:''};
+}
+function getWipedArchive(){
+  const arc=lsGetArr(WIPED_ARCHIVE_KEY);
+  const live=getFinishedPeople().map(p=>Object.assign({},p));
+  const tombs=getPurgedList().map(t=>Object.assign({},t,{deleted:true,deleted_at:t.wiped_at}));
+  return mergeTwoListsRaw(mergeTwoListsRaw(arc,live),tombs);
+}
+function archiveWipedEntry(entry){
+  if(!entry||!entry.slug)return;
+  const arc=lsGetArr(WIPED_ARCHIVE_KEY).filter(x=>String(x.slug||'').toLowerCase()!==String(entry.slug).toLowerCase());
+  arc.unshift(entry);lsSetArr(WIPED_ARCHIVE_KEY,arc,500);
+}
+function mergeFinishedEntry(p){
+  if(!p||!p.slug)return false;
+  const s=String(p.slug).toLowerCase();
+  if(p.deleted){ // route deletions to purged tombstones, drop live copy
+    rememberPurged(Object.assign(purgedLedgerEntry(s,p.wiped_at),{display_name:p.display_name||''}));
+    const list=lsGetArr(FINISHED_KEY).filter(x=>String(x.slug||'').toLowerCase()!==s);
+    lsSetArr(FINISHED_KEY,list.filter(x=>!x.deleted),200);
+    return true;
+  }
+  if(isPurged(s))return false; // R14: refuse to resurrect purged slug
+  const list=lsGetArr(FINISHED_KEY);
+  const idx=list.findIndex(x=>String(x.slug||'').toLowerCase()===s);
+  let isNew=true;
+  if(idx>=0){
+    isNew=false;
+    const old=list[idx];
+    list[idx]=Object.assign({},old,p,{slug:old.slug||p.slug,wiped_at:earliestWiped(old,p)});
+  }else{
+    list.unshift(p);
+  }
+  list.sort((x,y)=>{const wx=x.wiped_at?new Date(x.wiped_at).getTime():0;const wy=y.wiped_at?new Date(y.wiped_at).getTime():0;return wy-wx});
+  lsSetArr(FINISHED_KEY,list.filter(x=>!x.deleted),200);
+  return isNew;
+}
+// Debounced fetch-merge-write to ALL three cloud stores (R16/R17)
+let _pushFinTimer=null;
+function pushFinishedLedger(){
+  clearTimeout(_pushFinTimer);
+  _pushFinTimer=setTimeout(doPushFinishedLedger,800);
+}
+async function doPushFinishedLedger(){
+  try{
+    const [jsonTxt,setTxt,tblTxt]=await Promise.all([sb.sbGetFinishedJson(),sb.sbGetFinishedFromSettings(),sb.sbGetFinishedFromTable()]);
+    const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
+    const remote=[...parse(jsonTxt),...parse(setTxt),...parse(tblTxt)];
+    const local=lsGetArr(FINISHED_KEY);
+    const tombs=getPurgedList();
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw(local,remote),tombs); // tombstones appended LAST → win
+    const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
+    lsSetArr(FINISHED_KEY,merged.filter(x=>!x.deleted),200);
+    await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
+  }catch(e){console.warn('[finished-ledger] push failed:',e&&e.message)}
+}
+// Pull cloud → local (bootstrap seeds cloud from local on first run)
+async function pullFinishedLedger(){
+  try{
+    const [jsonTxt,setTxt,tblTxt]=await Promise.all([sb.sbGetFinishedJson(),sb.sbGetFinishedFromSettings(),sb.sbGetFinishedFromTable()]);
+    const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
+    const remote=[...parse(tblTxt),...parse(setTxt),...parse(jsonTxt)];
+    if(!remote.length){ // bootstrap: seed the cloud from local data
+      const local=lsGetArr(FINISHED_KEY);
+      if(local.length){await doPushFinishedLedger();return false}
+      return false;
+    }
+    remote.sort((x,y)=>{const wx=x&&x.wiped_at?new Date(x.wiped_at).getTime():0;const wy=y&&y.wiped_at?new Date(y.wiped_at).getTime():0;return wx-wy}); // oldest first
+    let changed=false;
+    const before=JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList());
+    remote.forEach(p=>{if(p&&p.slug)mergeFinishedEntry(p)});
+    changed=(JSON.stringify(lsGetArr(FINISHED_KEY))+JSON.stringify(getPurgedList()))!==before;
+    return changed;
+  }catch(e){return false}
+}
+// syncFinishedFromCloud: pull DUE people still present in `people` onto the ledger
+async function syncFinishedFromCloud(){
+  try{
+    const nowMs=Date.now();
+    const all=await sb.people()||[];
+    const due=all.filter(p=>{
+      if(!p.wipe_iso)return false;
+      const d=new Date(p.wipe_iso);
+      return !isNaN(d.getTime())&&d.getTime()<=nowMs;
+    }).slice(0,200);
+    let changed=false;
+    due.forEach(p=>{
+      if(isFinishedSlug(p.slug)||isPurged(p.slug))return;
+      if(addFinishedPerson({slug:p.slug,display_name:p.display_name,birthday:p.birthday,
+        requester_name:p.requester_name,requester_relation:p.requester_relation,requester_whatsapp:p.requester_whatsapp,
+        finished_manually:false,wiped_at:p.wipe_iso}))changed=true;
+    });
+    return changed;
+  }catch(e){return false}
+}
+function addFinishedPerson(person){
+  if(!person||!person.slug)return false;
+  const entry={
+    id:person.id||null,
+    slug:String(person.slug),
+    display_name:person.display_name||'',
+    birthday:person.birthday||null,
+    requester_name:person.requester_name||'',
+    requester_relation:person.requester_relation||'',
+    requester_whatsapp:person.requester_whatsapp||'', // private — never rendered publicly (R6/R7)
+    finished_manually:person.finished_manually!==false,
+    wiped_at:person.wiped_at||new Date().toISOString()
+  };
+  const isNew=mergeFinishedEntry(entry);
+  archiveWipedEntry(entry);
+  if(isNew)pushFinishedLedger();
+  return isNew;
+}
+async function removeFinishedPerson(slug){
+  const s=String(slug||'').toLowerCase();
+  if(!s)return;
+  const existing=getFinishedPeople().find(x=>String(x.slug||'').toLowerCase()===s);
+  const tomb=purgedLedgerEntry(s,(existing&&existing.wiped_at)||new Date().toISOString());
+  if(existing)tomb.display_name=existing.display_name||'';
+  rememberPurged(tomb);
+  lsSetArr(FINISHED_KEY,lsGetArr(FINISHED_KEY).filter(x=>String(x.slug||'').toLowerCase()!==s&&!x.deleted),200);
+  // fetch-merge-write ALL three cloud copies with the tombstone appended last (R13)
+  try{
+    const [jsonTxt,setTxt,tblTxt]=await Promise.all([sb.sbGetFinishedJson(),sb.sbGetFinishedFromSettings(),sb.sbGetFinishedFromTable()]);
+    const parse=t=>{try{const o=JSON.parse(t);return Array.isArray(o)?o:(o&&Array.isArray(o.people)?o.people:[])}catch(e){return[]}};
+    const merged=mergeTwoListsRaw(mergeTwoListsRaw([...parse(tblTxt),...parse(setTxt),...parse(jsonTxt),...lsGetArr(FINISHED_KEY)],[tomb]),[tomb]);
+    const payload=JSON.stringify({updated_at:new Date().toISOString(),people:merged});
+    await Promise.all([sb.sbPutFinishedJson(payload),sb.sbPutFinishedToSettings(payload),sb.sbPutFinishedToTable(payload)]);
+  }catch(e){console.warn('[finished-ledger] remove push failed:',e&&e.message)}
+}
+async function removeFinishedPeople(slugs){
+  for(const s of (slugs||[]))await removeFinishedPerson(s);
+}
+function restoreFromWipedArchive(slug){
+  const s=String(slug||'').toLowerCase();
+  const rec=getWipedArchive().find(x=>String(x.slug||'').toLowerCase()===s);
+  if(!rec)return false;
+  forgetPurged(s); // lift the tombstone first (R14)
+  mergeFinishedEntry(Object.assign({},rec,{deleted:false}));
+  pushFinishedLedger();
+  return true;
+}
+
+// ===== Home screen 💐 Finished section (§4) =====
+let FINISHED_COLLAPSED=true; // section starts collapsed (R23)
+window.homeVisiblePeople=function(){
+  const nowMs=Date.now();
+  return (S.PEOPLE||[]).filter(p=>{
+    if(p.enabled===false)return false;                       // rule 1
+    if(isFinishedSlug(p.slug))return false;                  // rule 2 (R3)
+    if(p.wipe_iso){const d=new Date(p.wipe_iso);if(!isNaN(d.getTime())&&d.getTime()<=nowMs)return false;} // rule 3
+    return true;
+  });
+};
+// Returns live-table people whose wipe date passed AND who are already on the ledger.
+// Deliberately does NOT auto-publish due-but-unmoved people (HD1.1 / R1).
+function finishedFromPeopleTable(){
+  const nowMs=Date.now();
+  return (S.PEOPLE||[]).filter(p=>{
+    if(!p.wipe_iso)return false;
+    const d=new Date(p.wipe_iso);
+    return !isNaN(d.getTime())&&d.getTime()<=nowMs&&isFinishedSlug(p.slug);
+  }).map(p=>({slug:p.slug,display_name:p.display_name,birthday:p.birthday,wiped_at:p.wipe_iso,finished_manually:true}));
+}
+window.renderFinishedSection=function(){
+  const wrap=$('homeFinished'),headEl=$('homeFinishedHead'),cnt=$('homeFinishedCount'),listEl=$('homeFinishedList');
+  if(!wrap||!listEl)return;
+  let finished=getFinishedPeople();
+  finished=mergeTwoListsRaw(finished,finishedFromPeopleTable()).filter(p=>!p.deleted);
+  if(!finished.length){wrap.style.display='none';wrap.classList.add('collapsed');return}
+  wrap.style.display='';
+  if(cnt)cnt.textContent=finished.length;
+  const escAttr=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  listEl.innerHTML='';
+  finished.forEach(p=>{
+    const name=String(p.display_name||p.slug||'Person');
+    let bdayLine='';
+    const d=daysUntilBirthday(p.birthday);
+    if(d!==null){
+      if(d===0)bdayLine='🎂 Birthday today!';
+      else if(d===1)bdayLine='🎂 Birthday tomorrow';
+      else bdayLine='🎂 in '+d+' days';
+      bdayLine+=' · '+formatBirthdayDate(p.birthday);
+    }else if(p.birthday){bdayLine='🎂 '+formatBirthdayDate(p.birthday)}
+    const b=document.createElement('button');b.type='button';b.className='home-btn finished-btn';
+    b.dataset.slug=escAttr(p.slug);b.dataset.name=name.toLowerCase();
+    b.innerHTML='<span class="home-btn-emoji">💐</span><span>'+name.replace(/</g,'&lt;')+'</span>'
+      +(bdayLine?'<span class="home-btn-bday finished-date">'+bdayLine+'</span>':'');
+    listEl.appendChild(b);
+  });
+  // Header collapse toggle — bound exactly once
+  if(headEl&&headEl.dataset._bound!=='1'){
+    headEl.dataset._bound='1';
+    headEl.onclick=()=>{FINISHED_COLLAPSED=!FINISHED_COLLAPSED;wrap.classList.toggle('collapsed',FINISHED_COLLAPSED)};
+  }
+  wrap.classList.toggle('collapsed',FINISHED_COLLAPSED);
+  // Tile clicks: admin = remove (with confirm), visitor = thank-you toast (R9/R24)
+  listEl.querySelectorAll('.finished-btn').forEach(b=>{
+    b.onclick=async()=>{
+      const slug=b.dataset.slug;
+      if(S.ADMIN_MODE===true){
+        if(!confirm('💐 Remove “'+(b.dataset.name||slug)+'” from the finished list?\n\nThey stay safe in the private 🗑️ Wiped Out archive and can be restored anytime.'))return;
+        await removeFinishedPerson(slug);
+        renderFinishedSection();
+        if(window.loadAdminFinished)loadAdminFinished();
+        if(window.updateFinishedBadge)updateFinishedBadge();
+        __showToast('🗑️ Removed from home screen (cloud-synced)');
+      }else{
+        __showToast('💐 This surprise has been completed and archived. Thank you for being part of it 💕');
+      }
+    };
+  });
+};
+
+// ===== Admin: Move to Finished (§6.2) =====
+async function moveCompletedGuestsToFinished(ids){
+  ids=(ids||[]).filter(Boolean);
+  if(!ids.length){__showToast('⚠️ Tick at least one completed submission first.',false);return}
+  if(!confirm('💐 Move '+ids.length+' to Finished?\n\nTheir card data will be wiped and they will appear on the home screen 💐 Finished section for every visitor.'))return;
+  __showToast('⏳ Moving to Finished…');
+  const rows=await sb.guests()||[];
+  let ok=0,fail=0;
+  for(const id of ids){
+    try{
+      const r=rows.find(x=>x.id===id);if(!r){fail++;continue}
+      const pl=r.payload||{};const prop=pl.person_proposal||{};const gi=pl.guest_info||{};
+      const slug=String(r.approved_login_id||prop.slug||r.target_person_slug||'');
+      if(!slug){fail++;continue}
+      const person=(S.PEOPLE||[]).find(p=>p.id===r.approved_person_id)||(S.PEOPLE||[]).find(p=>String(p.slug||'').toLowerCase()===slug.toLowerCase());
+      addFinishedPerson({
+        id:r.id,slug,
+        display_name:prop.display_name||(person&&person.display_name)||'',
+        birthday:(person&&person.birthday)||prop.birthday||null,
+        requester_name:gi.name||r.guest_name||'',
+        requester_relation:gi.relation||'',
+        requester_whatsapp:gi.whatsapp||r.guest_whatsapp||'', // kept PRIVATE
+        finished_manually:true,
+        wiped_at:(person&&person.wipe_iso)||new Date().toISOString() // scheduled "said" date/time (R4)
+      });
+      if(person)await wipeOnePerson(person.id); // wipe card data without re-adding a duplicate ledger entry
+      await sb.updGuest(r.id,{status:'finished'}); // R11
+      ok++;
+    }catch(e){fail++;console.warn('[finished] move failed for #'+id,e&&e.message)}
+  }
+  try{S.PEOPLE=await sb.people()||[];}catch(e){}
+  if(window.buildHome)buildHome();
+  loadGuestHistory();
+  if(window.loadAdminFinished)loadAdminFinished();
+  if(window.updateFinishedBadge)updateFinishedBadge();
+  __showToast('💐 '+ok+' moved to Finished'+(fail?' · '+fail+' failed':''),fail&&!ok?false:undefined);
+}
+
+// ===== Admin: Delete Completed rows from database (§6.3) =====
+async function deleteCompletedGuestsFromDb(ids){
+  ids=(ids||[]).filter(Boolean);
+  if(!ids.length){__showToast('⚠️ Tick at least one completed submission first.',false);return}
+  if(!confirm('🗑️ Permanently delete '+ids.length+' submission record(s) from the database?\n\nThis cannot be undone.'))return;
+  __showToast('⏳ Deleting…');
+  let ok=0,fail=0;
+  for(const id of ids){
+    try{await sb.delGuest(id);ok++}catch(e){fail++}
+  }
+  loadGuestHistory();
+  if(window.loadAdminFinished)loadAdminFinished();
+  if(window.updateFinishedBadge)updateFinishedBadge();
+  __showToast('🗑️ '+ok+' deleted'+(fail?' · '+fail+' failed':''),fail&&!ok?false:undefined);
+}
+
+// ===== Admin: 💐 Finished tab renderer (§6.5) =====
+async function loadAdminFinished(){
+  const list=$('adminFinishedList');if(!list)return;
+  list.textContent='Loading…';
+  try{ await pullFinishedLedger(); }catch(e){}
+  const localList=getFinishedPeople();
+  const rows=(await sb.guests())||[];
+  const finishedRows=rows.filter(r=>r.status==='finished');
+  // bySlug index from finished + approved rows
+  const bySlug={};
+  rows.filter(r=>r.status==='finished'||r.status==='approved').forEach(r=>{
+    const pl=r.payload||{};const prop=pl.person_proposal||{};
+    const keys=[r.approved_login_id,prop.slug,r.target_person_slug];
+    keys.forEach(k=>{if(k)bySlug[String(k).toLowerCase()]=bySlug[String(k).toLowerCase()]||r});
+  });
+  const mapped=finishedRows.map(r=>{
+    const pl=r.payload||{};const prop=pl.person_proposal||{};const gi=pl.guest_info||{};
+    const slug=String(r.approved_login_id||prop.slug||r.target_person_slug||'');
+    return {id:r.id,slug,display_name:prop.display_name||r.target_person_slug||slug,birthday:prop.birthday||null,
+      requester_name:gi.name||r.guest_name||'',requester_relation:gi.relation||'',requester_whatsapp:gi.whatsapp||r.guest_whatsapp||'',
+      finished_manually:true,wiped_at:r.finished_at||r.updated_at||r.created_at||new Date().toISOString(),_rowId:r.id};
+  });
+  const ledger=mergeTwoListsRaw(localList,mapped).filter(p=>!p.deleted);
+  if(window.updateFinishedBadge)updateFinishedBadge();
+  if(!ledger.length){
+    list.innerHTML='<div class="empty-state" style="padding:1.2rem;text-align:center;color:var(--c-text-muted);"><div style="font-size:2rem;">💐</div>No finished people yet — move someone here from the ✅ Completed tab.</div>';
+    updateFinSelBar();return;
+  }
+  const esc=s=>String(s==null?'':s).replace(/</g,'&lt;');
+  list.innerHTML='';
+  ledger.forEach(p=>{
+    const s=String(p.slug||'').toLowerCase();
+    const linked=bySlug[s]&&bySlug[s].status==='finished'?bySlug[s]:null;
+    const wa=String(p.requester_whatsapp||'').replace(/[^0-9+]/g,'');
+    const waLink=wa?('https://wa.me/'+wa.replace(/[^0-9]/g,'')):'';
+    const wipedStr=p.wiped_at?(new Date(p.wiped_at).toLocaleString()):'';
+    const el=document.createElement('div');el.className='repeat-row guest-row';
+    el.style.background='linear-gradient(135deg,#faf4fd,#f3e8fa)';
+    el.innerHTML=`<label style="position:absolute;top:.55rem;left:.55rem;z-index:2;"><input type="checkbox" class="guest-check finished-check" data-slug="${esc(p.slug)}" onclick="event.stopPropagation()"></label>
+    <div style="font-size:.85rem;line-height:1.6;padding-left:1.4rem;">
+      <strong style="color:#8e44ad;">💐 ${esc(p.display_name||p.slug)}</strong>${p.finished_manually===false?' <span class="person-id-pill" style="background:#eee9f6;color:#8e44ad;border-color:#8e44ad;">🕊️ auto-wiped</span>':''}
+      <div><strong>🔑 Login ID:</strong> <code style="background:#fff;padding:.15rem .45rem;border-radius:.35rem;font-family:monospace;">${esc(p.slug)}</code></div>
+      ${p.birthday?'<div>🎂 Birthday: '+esc(String(p.birthday).slice(0,10))+'</div>':''}
+      ${wipedStr?'<div>🗓️ Wiped out / finished: '+esc(wipedStr)+'</div>':''}
+      ${(p.requester_name||wa)?'<hr style="border:none;border-top:1px dashed rgba(142,68,173,.3);margin:.4rem 0;">':''}
+      ${p.requester_name?'<strong>👤 Requester:</strong> '+esc(p.requester_name)+(p.requester_relation?' ('+esc(p.requester_relation)+')':'')+'<br>':''}
+      ${wa?'📱 '+esc(wa)+' '+(waLink?'<a href="'+waLink+'" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#25D366;color:#fff;padding:.15rem .55rem;border-radius:40px;font-size:.75rem;text-decoration:none;font-weight:800;">💬 Chat</a>':'')+'<br>':''}
+    </div>
+    <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;">
+      ${linked?'<button type="button" class="repeat-add fin-undo-btn" data-id="'+linked.id+'" style="background:#0a7a3d;">↩️ Undo — move back to Completed</button>':''}
+      <button type="button" class="repeat-add fin-del-btn" data-slug="${esc(p.slug)}" style="background:#c0392b;">🗑️ Remove from home screen</button>
+    </div>`;
+    list.appendChild(el);
+  });
+  list.querySelectorAll('.fin-undo-btn').forEach(b=>{
+    b.onclick=async()=>{
+      try{
+        await sb.updGuest(parseInt(b.dataset.id),{status:'approved'}); // R12
+        __showToast('↩️ Moved back to ✅ Completed');
+        loadAdminFinished();loadGuestHistory();
+        if(window.updateFinishedBadge)updateFinishedBadge();
+      }catch(e){__showToast('❌ '+e.message,false)}
+    };
+  });
+  list.querySelectorAll('.fin-del-btn').forEach(b=>{
+    b.onclick=async()=>{
+      if(!confirm('🗑️ Remove this person from the home screen for ALL visitors?\n\nA privacy-stripped tombstone syncs everywhere; they stay safe in the private archive.'))return;
+      await removeFinishedPerson(b.dataset.slug);
+      loadAdminFinished();
+      if(window.renderFinishedSection)renderFinishedSection();
+      if(window.updateFinishedBadge)updateFinishedBadge();
+      __showToast('🗑️ Removed from home screen');
+    };
+  });
+  const boxes=()=>Array.from(list.querySelectorAll('.finished-check'));
+  boxes().forEach(cb=>{cb.onchange=updateFinSelBar});
+  const rm=$('removeSelectedFromFinished');
+  if(rm&&rm.dataset._bound!=='1'){
+    rm.dataset._bound='1';
+    rm.onclick=removeSelectedFinishedPeople;
+  }
+  updateFinSelBar();
+}
+async function removeSelectedFinishedPeople(){
+  const list=$('adminFinishedList');if(!list)return;
+  const slugs=Array.from(list.querySelectorAll('.finished-check:checked')).map(x=>x.dataset.slug);
+  if(!slugs.length){__showToast('⚠️ Tick at least one finished person first.',false);return}
+  if(!confirm('🗑️ Remove '+slugs.length+' from the home screen for every visitor?'))return;
+  await removeFinishedPeople(slugs);
+  loadAdminFinished();
+  if(window.renderFinishedSection)renderFinishedSection();
+  if(window.updateFinishedBadge)updateFinishedBadge();
+  __showToast('🗑️ '+slugs.length+' removed from home screen');
+}
+window.loadAdminFinished=loadAdminFinished;
+window.moveCompletedGuestsToFinished=moveCompletedGuestsToFinished;
+window.updateFinishedBadge=function(){
+  const badge=$('finishedBadge');if(!badge)return;
+  const n=getFinishedPeople().length; // R20
+  badge.textContent=n;
+  badge.style.display=n?'inline-block':'none';
+};
+window.bindGuestStatusTabs=function(){
+  const tabsEl=$('guestStatusTabs');if(!tabsEl||tabsEl.dataset._bound==='1')return;
+  const sections={pending:'guestPendingSection',approved:'guestCompletedSection',finished:'guestFinishedSection',rejected:'guestRejectedSection'};
+  const loaders={pending:loadGuestApprovals,approved:loadGuestHistory,finished:loadAdminFinished,rejected:loadRejectedGuests};
+  tabsEl.querySelectorAll('.panel-tab').forEach(tab=>{
+    if(tab.dataset._bound==='1')return;
+    tab.dataset._bound='1';
+    tab.onclick=()=>{
+      tabsEl.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const st=tab.dataset.guestStatus;
+      Object.keys(sections).forEach(k=>{const el=$(sections[k]);if(el)el.style.display=(k===st)?'':'none'});
+      const ld=loaders[st];if(ld)ld();
+      if(st==='finished'&&window.updateFinishedBadge)updateFinishedBadge();
+    };
+  });
+};
+async function loadRejectedGuests(){
+  const list=$('guestRejectedList');if(!list)return;
+  list.textContent='Loading…';
+  const rows=(await sb.guests())||[];
+  const rejected=rows.filter(r=>r.status==='rejected');
+  if(!rejected.length){list.innerHTML='<div style="padding:.6rem;color:var(--c-text-muted);">No rejected submissions.</div>';return}
+  const esc=s=>String(s==null?'':s).replace(/</g,'&lt;');
+  list.innerHTML='';
+  rejected.forEach(r=>{
+    const pl=r.payload||{};const prop=pl.person_proposal||{};const gi=pl.guest_info||{};
+    const el=document.createElement('div');el.className='repeat-row guest-row';
+    el.style.background='linear-gradient(135deg,#fdf4f4,#fbeaea)';
+    el.innerHTML=`<div style="font-size:.85rem;line-height:1.6;">
+      <strong>🗑️ ${esc(prop.display_name||r.target_person_slug)}</strong>
+      <em style="color:var(--c-text-muted);"> (login id: ${esc(prop.slug||r.target_person_slug||'')})</em>
+      ${gi.name?'<div>👤 Requester: '+esc(gi.name)+'</div>':''}
+      ${r.created_at?'<div style="font-size:.75rem;color:var(--c-text-muted);font-style:italic;">Submitted: '+esc(new Date(r.created_at).toLocaleString())+'</div>':''}
+    </div>`;
+    list.appendChild(el);
+  });
+}
+window.loadRejectedGuests=loadRejectedGuests;
+if($('refreshAdminFinished'))$('refreshAdminFinished').onclick=loadAdminFinished;
+if($('refreshRejectedGuests'))$('refreshRejectedGuests').onclick=loadRejectedGuests;
 
 const G={gifts:[],story:[],events:[],voice:[],video:[],pins:[],media:[],privateMedia:[],theme:'',counters:{}};
 
@@ -3372,12 +4061,11 @@ $('guestAddPinRow').onclick=()=>{G.pins.push({label:'',lat:'',lng:'',photo_drive
 function renderGuestMedia(){ const w=$('guestMediaRepeater');if(!w)return;w.innerHTML=''; (G.media||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{G.media[+el.dataset.i][el.dataset.gm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.media.splice(+b.dataset.i,1);renderGuestMedia()}}); }
 $('guestAddMediaRow').onclick=()=>{G.media=G.media||[];G.media.push({type:'photo',drive_id:'',src:'',title:''});renderGuestMedia()};
 $('guestBulkAddMedia').onclick=()=>{
-  const v=$('g_mediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('g_mediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   G.media=G.media||[];const before=G.media.length;
   ids.forEach(id=>G.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  urls.forEach(u=>G.media.push({type:'video',drive_id:'',src:u,title:''}));
-  G.media=dedupeMedia(G.media);const removed=(before+ids.length+urls.length)-G.media.length;
+  G.media=dedupeMedia(G.media);const removed=(before+ids.length)-G.media.length;
   renderGuestMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3464,12 +4152,11 @@ $('guestExcelInput').onchange=async(e)=>{
 function renderGuestPrivate(){ const w=$('guestPrivateRepeater');if(!w)return;w.innerHTML=''; (G.privateMedia||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-gprm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-gprm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-gprm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gprm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{G.privateMedia[+el.dataset.i][el.dataset.gprm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.privateMedia.splice(+b.dataset.i,1);renderGuestPrivate()}}); }
 $('guestAddPrivateRow').onclick=()=>{G.privateMedia=G.privateMedia||[];G.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderGuestPrivate()};
 $('guestBulkAddPrivate').onclick=()=>{
-  const v=$('g_privateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('g_privateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   G.privateMedia=G.privateMedia||[];const before=G.privateMedia.length;
   ids.forEach(id=>G.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  urls.forEach(u=>G.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
-  G.privateMedia=dedupeMedia(G.privateMedia);const removed=(before+ids.length+urls.length)-G.privateMedia.length;
+  G.privateMedia=dedupeMedia(G.privateMedia);const removed=(before+ids.length)-G.privateMedia.length;
   renderGuestPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3586,12 +4273,11 @@ $('reAddPinRow').onclick=()=>{RE.pins.push({label:'',lat:'',lng:'',photo_drive_i
 function renderREMedia(){ const w=$('reMediaRepeater');if(!w)return;w.innerHTML=''; (RE.media||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-rm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-rm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-rm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rm="title" data-i="${i}" value="${(m.title||'').replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{RE.media[+el.dataset.i][el.dataset.rm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.media.splice(+b.dataset.i,1);renderREMedia()}}); }
 $('reAddMediaRow').onclick=()=>{RE.media=RE.media||[];RE.media.push({type:'photo',drive_id:'',src:'',title:''});renderREMedia()};
 $('reBulkAddMedia').onclick=()=>{
-  const v=$('re_bulkMediaIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('re_bulkMediaIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   RE.media=RE.media||[];const before=RE.media.length;
   ids.forEach(id=>RE.media.push({type:'photo',drive_id:id,src:'',title:''}));
-  urls.forEach(u=>RE.media.push({type:'video',drive_id:'',src:u,title:''}));
-  RE.media=dedupeMedia(RE.media);const removed=(before+ids.length+urls.length)-RE.media.length;
+  RE.media=dedupeMedia(RE.media);const removed=(before+ids.length)-RE.media.length;
   renderREMedia();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3681,12 +4367,11 @@ $('viewerEditCardBtn').onclick=()=>openRequesterEditor();
 function renderREPrivate(){ const w=$('rePrivateRepeater');if(!w)return;w.innerHTML=''; (RE.privateMedia||[]).forEach((m,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Type</label><select class="panel-select" data-rpm="type" data-i="${i}"><option value="photo"${m.type==='photo'?' selected':''}>Photo</option><option value="video"${m.type==='video'?' selected':''}>Video</option></select></div><div class="panel-field"><label class="panel-label">Drive ID</label><input type="text" class="panel-input" data-rpm="drive_id" data-i="${i}" value="${(m.drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Direct URL</label><input type="text" class="panel-input" data-rpm="src" data-i="${i}" value="${(m.src||'')}"></div><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rpm="title" data-i="${i}" value="${stripPrivTitle(m.title).replace(/"/g,'&quot;')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input,select').forEach(el=>{el.onchange=el.oninput=()=>{RE.privateMedia[+el.dataset.i][el.dataset.rpm]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.privateMedia.splice(+b.dataset.i,1);renderREPrivate()}}); }
 $('reAddPrivateRow').onclick=()=>{RE.privateMedia=RE.privateMedia||[];RE.privateMedia.push({type:'photo',drive_id:'',src:'',title:'',priv:true});renderREPrivate()};
 $('reBulkAddPrivate').onclick=()=>{
-  const v=$('re_bulkPrivateIds').value||'';const {driveIds:ids,urls}=splitBulkMediaTokens(v);
-  if(!ids.length&&!urls.length){__showToast('Paste at least one Drive ID or direct link',false);return}
+  const v=$('re_bulkPrivateIds').value||'';const ids=v.split(',').map(x=>x.trim()).filter(Boolean);
+  if(!ids.length){__showToast('Paste at least one ID',false);return}
   RE.privateMedia=RE.privateMedia||[];const before=RE.privateMedia.length;
   ids.forEach(id=>RE.privateMedia.push({type:'photo',drive_id:id,src:'',title:'',priv:true}));
-  urls.forEach(u=>RE.privateMedia.push({type:'video',drive_id:'',src:u,title:'',priv:true}));
-  RE.privateMedia=dedupeMedia(RE.privateMedia);const removed=(before+ids.length+urls.length)-RE.privateMedia.length;
+  RE.privateMedia=dedupeMedia(RE.privateMedia);const removed=(before+ids.length)-RE.privateMedia.length;
   renderREPrivate();
   __showToast('✅ Added'+(removed>0?(' · '+removed+' duplicate(s) removed'):''));
 };
@@ -3743,10 +4428,22 @@ async function boot(){
     document.body.appendChild(sp);
   }
   try{ await sb.wipeExpired(); }catch(e){}
+  // HD0.6/HD1.1: pull the cloud Finished ledger BEFORE first paint so finished people
+  // never flash on the active grid and 💐 tiles are complete on first render (R19)
+  try{ await pullFinishedLedger(); }catch(e){}
   S.PEOPLE=await sb.people()||[];
   const gs=await sb.getSet(null);
   S.CURR.shared={adminPassword:(gs&&gs['shared__adminPassword'])||FALLBACK_ADMIN_PW,adminLoginEnabled:(gs&&gs['shared__adminLoginEnabled'])};
   if(window.buildHome)window.buildHome();
+  if(window.updateFinishedBadge)updateFinishedBadge();
+  // Background maintenance (non-blocking): sync ledger + due people, repaint only when changed
+  (async()=>{
+    try{
+      const c1=await pullFinishedLedger();
+      const c2=await syncFinishedFromCloud();
+      if(c1||c2){S.PEOPLE=await sb.people()||S.PEOPLE;if(window.buildHome)buildHome();if(window.renderFinishedSection)renderFinishedSection();}
+    }catch(e){}
+  })();
   if(SS_restoreSession && SS_restoreSession()) return;
   await checkWipe();
   await loadReviews();
@@ -3755,7 +4452,7 @@ async function boot(){
   if(urlP){
     const p=S.PEOPLE.find(x=>x.slug===urlP);
     if(p)setTimeout(()=>{
-      const ep=S.PEOPLE.filter(x=>x.enabled!==false);
+      const ep=window.homeVisiblePeople();
       const btns=document.querySelectorAll('#homeGrid .home-btn');
       const idx=ep.findIndex(x=>x.id===p.id);
       if(idx>=0&&btns[idx])btns[idx].click();

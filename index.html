@@ -54,6 +54,15 @@
   </div>
 </div>
 <div class="home-grid" id="homeGrid"><div class="home-loading">Loading…</div></div>
+<!-- 💐 FINISHED section (HD0.5/HD0.6/HD1.1) — rendered by renderFinishedSection() in js/app.js -->
+<div class="home-finished collapsed" id="homeFinished" style="display:none;">
+  <div class="hf-head" id="homeFinishedHead">
+    <span class="hf-title">💐 Finished</span>
+    <span class="hf-count" id="homeFinishedCount">0</span>
+    <span class="hf-chev">▼</span>
+  </div>
+  <div class="home-finished-body" id="homeFinishedList"></div>
+</div>
 <div class="home-footer">Guests can download the Excel template, fill it, and submit it for admin approval.</div>
 <div class="home-reviews" id="homeReviews" style="display:none;">
   <div class="hr-title">⭐ Reviews</div>
@@ -353,8 +362,8 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="geMediaRepeater"></div>
     <button type="button" class="repeat-add" id="geAddMediaRow">➕ Add Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (photos) &amp; Direct Video Links — comma or line separated</label><textarea class="panel-textarea" id="ge_bulkMediaIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="geBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs / links above</button>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="ge_bulkMediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="geBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-pane" id="ge-pane-private">
@@ -363,8 +372,8 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="gePrivateRepeater"></div>
     <button type="button" class="repeat-add" id="geAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (photos) &amp; Direct Video Links — comma or line separated</label><textarea class="panel-textarea" id="ge_bulkPrivateIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="geBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs / links above</button>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="ge_bulkPrivateIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="geBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-actions">
@@ -467,8 +476,8 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="reMediaRepeater"></div>
     <button type="button" class="repeat-add" id="reAddMediaRow">➕ Add Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (photos) &amp; Direct Video Links — comma or line separated</label><textarea class="panel-textarea" id="re_bulkMediaIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="reBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs / links above</button>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="re_bulkMediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="reBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-pane" id="re-pane-private">
@@ -477,8 +486,8 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="rePrivateRepeater"></div>
     <button type="button" class="repeat-add" id="reAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (photos) &amp; Direct Video Links — comma or line separated</label><textarea class="panel-textarea" id="re_bulkPrivateIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="reBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs / links above</button>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="re_bulkPrivateIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="reBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-actions">
@@ -767,15 +776,48 @@
   </div>
 </div>
 <div class="panel-pane" id="pane-guests">
-  <div class="panel-section">
+  <!-- 💐 Finished status tabs (HD0.5 / HD1.1) — bound by bindGuestStatusTabs() in js/app.js -->
+  <div class="panel-tabs" id="guestStatusTabs" style="margin-bottom:.8rem;">
+    <button type="button" class="panel-tab active" data-guest-status="pending">⏳ Pending</button>
+    <button type="button" class="panel-tab" data-guest-status="approved">✅ Completed</button>
+    <button type="button" class="panel-tab" data-guest-status="finished">💐 Finished
+      <span class="reminder-badge" id="finishedBadge" style="display:none;background:#8e44ad;">0</span>
+    </button>
+    <button type="button" class="panel-tab" data-guest-status="rejected">🗑️ Rejected</button>
+  </div>
+  <div class="panel-section" id="guestPendingSection">
     <div class="panel-section-title">✍️ Pending Guest Submissions</div>
     <div id="pendingGuestsList">Loading…</div>
     <button type="button" class="repeat-add" id="refreshGuests" style="margin-top:.6rem;">🔄 Refresh</button>
   </div>
-  <div class="panel-section">
-    <div class="panel-section-title">📜 Guest Submissions History (Approved)</div>
+  <!-- ✅ Completed tab: tick rows → move to Finished -->
+  <div class="panel-section" id="guestCompletedSection" style="display:none;">
+    <div class="panel-section-title">📜 Guest Submissions History (Approved / Completed)</div>
+    <div class="guest-select-bar" id="completedSelectBar">
+      <label class="guest-select-all"><input type="checkbox" id="selectAllCompleted"> Select all</label>
+      <span class="guest-sel-count" id="completedSelCount">0 selected</span>
+      <button type="button" class="repeat-add" id="moveSelectedToFinished" style="background:#8e44ad;min-width:0;padding:.45rem .9rem;">💐 Move selected to Finished</button>
+      <button type="button" class="repeat-add" id="deleteSelectedFromDb" style="background:#c0392b;min-width:0;padding:.45rem .9rem;">🗑️ Delete selected from database</button>
+    </div>
+    <div class="panel-sub">Tick a completed submission and press “Move selected to Finished” to publish it on the home screen 💐 Finished section. Auto-wiped people float to the TOP with a 🕊️ badge.</div>
     <div id="guestHistoryList">Loading…</div>
     <button type="button" class="repeat-add" id="refreshGuestHistory" style="margin-top:.6rem;">🔄 Refresh</button>
+  </div>
+  <!-- 💐 Finished tab -->
+  <div class="panel-section" id="guestFinishedSection" style="display:none;">
+    <div class="panel-section-title">💐 Finished People (shown on the home screen)</div>
+    <div class="guest-select-bar" id="finishedSelectedActions" style="display:none;">
+      <span class="guest-sel-count" id="finishedSelCount"></span>
+      <button type="button" class="repeat-add" id="removeSelectedFromFinished" style="background:#c0392b;min-width:0;padding:.45rem .9rem;">🗑️ Remove from home screen</button>
+    </div>
+    <div class="panel-sub">Everyone moved here from ✅ Completed (or auto-wiped after review) shows up on the home screen 💐 Finished section for every visitor, on every device — until an admin removes them.</div>
+    <div id="adminFinishedList">Loading…</div>
+    <button type="button" class="repeat-add" id="refreshAdminFinished" style="margin-top:.6rem;">🔄 Refresh</button>
+  </div>
+  <div class="panel-section" id="guestRejectedSection" style="display:none;">
+    <div class="panel-section-title">🗑️ Rejected Submissions</div>
+    <div id="guestRejectedList">Loading…</div>
+    <button type="button" class="repeat-add" id="refreshRejectedGuests" style="margin-top:.6rem;">🔄 Refresh</button>
   </div>
 </div>
 <div class="panel-pane" id="pane-security">
@@ -976,9 +1018,9 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="guestMediaRepeater"></div>
     <button type="button" class="repeat-add" id="guestAddMediaRow">➕ Add Photo/Video Row</button>
-    <div style="margin-top:.5rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Or paste many Drive IDs (photos) and direct video links below (comma or line separated) to bulk-add.</div>
-    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_mediaIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="guestBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs / links above</button>
+    <div style="margin-top:.5rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Or paste many Drive IDs below (comma-separated) to bulk-add.</div>
+    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_mediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="guestBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-pane" id="gpane-private">
@@ -987,8 +1029,8 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="guestPrivateRepeater"></div>
     <button type="button" class="repeat-add" id="guestAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_privateIds" placeholder="driveId1, driveId2&#10;https://example.com/video.mp4"></textarea></div>
-    <button type="button" class="repeat-add" id="guestBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs / links above</button>
+    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_privateIds" placeholder="id1, id2, id3"></textarea></div>
+    <button type="button" class="repeat-add" id="guestBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
 <div class="panel-actions">

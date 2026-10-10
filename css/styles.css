@@ -351,3 +351,24 @@ h1.card-title{font-size:2.4rem;font-weight:700;font-style:italic;margin-top:.25r
 .mini-slide-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.35);color:#fff;width:2.2rem;height:2.2rem;border-radius:50%;font-size:1rem;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
 .mini-slide-nav.prev{left:.5rem;}
 .mini-slide-nav.next{right:.5rem;}
+
+/* ===== 💐 FINISHED FEATURE (HD0.5/HD0.6/HD1.1/HD1.2) — home section + admin bars ===== */
+.home-finished{margin-top:1.4rem;width:100%;max-width:600px;background:linear-gradient(135deg,rgba(155,90,120,.18),rgba(90,60,90,.18));border:2px dashed rgba(255,215,0,.35);border-radius:1.2rem;padding:.9rem 1rem;backdrop-filter:blur(10px);box-shadow:0 14px 32px -18px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.05) inset;color:#fff;text-align:center}
+.home-finished.collapsed .home-finished-body{display:none}
+.home-finished .hf-head{display:flex;align-items:center;justify-content:center;gap:.5rem;cursor:pointer;user-select:none;padding:.15rem 0}
+.home-finished .hf-title{font-size:.85rem;font-weight:900;color:#ffd6e0;text-transform:uppercase;letter-spacing:1.3px}
+.home-finished .hf-count{font-size:.62rem;font-weight:900;background:linear-gradient(135deg,#6b4a8b,#3a2456);color:#fff;padding:.1rem .45rem;border-radius:40px}
+.home-finished .hf-chev{font-size:.85rem;color:#ffd6e0;transition:transform .25s ease;font-weight:900}
+.home-finished.collapsed .hf-chev{transform:rotate(-90deg)}
+.home-finished:not(.collapsed) .hf-chev{transform:rotate(0deg)}
+.home-finished .home-finished-body{margin-top:.7rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.55rem}
+.home-finished .finished-btn{background:linear-gradient(135deg,rgba(120,110,140,.55),rgba(70,50,90,.55));border-color:rgba(255,215,0,.35);opacity:.85;min-height:80px;font-size:.78rem;padding:.6rem .45rem .55rem;cursor:pointer;color:#fff;min-width:0}
+.home-finished .finished-btn:hover{opacity:1;background:linear-gradient(135deg,rgba(140,120,160,.7),rgba(90,70,110,.7))}
+.home-finished .finished-btn .home-btn-emoji{font-size:1.3rem}
+.home-finished .finished-btn .finished-date{background:rgba(255,215,0,.22);color:#ffd6e0;font-size:.52rem;padding:.08rem .4rem;border-radius:40px}
+.guest-select-bar{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;background:linear-gradient(135deg,#faf4fd,#f3e8fa);border:1.5px dashed #8e44ad;border-radius:.8rem;padding:.5rem .7rem;margin-bottom:.6rem}
+.guest-select-all{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;font-weight:800;color:#8e44ad;cursor:pointer}
+.guest-sel-count{font-size:.78rem;font-weight:900;color:#8e44ad}
+.guest-check{accent-color:#8e44ad;width:16px;height:16px;cursor:pointer}
+.reminder-badge{display:inline-block;min-width:1.1em;text-align:center;background:#c0392b;color:#fff;font-size:.62rem;font-weight:900;padding:.08rem .35rem;border-radius:40px;margin-left:.25rem}
+.repeat-row.awaiting-finish{border:1.5px solid #b26a00}
