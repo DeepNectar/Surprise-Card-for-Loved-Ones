@@ -759,6 +759,7 @@ async function triggerAdminPrompt(){
 const HD_VERSION_SETTING='shared__hd_version';
 const WHATS_NEW_SETTING='shared__whats_new';
 const WHATS_NEW_MAX=60; // keep the newest 60 entries in the cloud
+const HOME_WHATS_NEW_MAX=3; // 🆕 HD1.3: home screen shows ONLY the last 3 deployed entries
 const WHATS_NEW_SEED_FLAG='surprise_whatsnew_seeded_v1'; // 🆕 HD1.3: one-time bootstrap guard (local only)
 
 function bumpHdVersion(cur){
@@ -908,10 +909,10 @@ function refreshHdVersionBadges(){
 function renderWhatsNew(){
   const wrap=$('homeWhatsNew'),list=$('homeWhatsNewList'),cntEl=$('homeWhatsNewCount');
   if(!wrap||!list)return;
-  const items=(S.WHATS_NEW||[]).slice(0,12);
+  const items=(S.WHATS_NEW||[]).slice(0,HOME_WHATS_NEW_MAX); // 🆕 HD1.3: home screen shows ONLY the last 3 deployed entries
   if(!items.length){wrap.style.display='none';return;}
   wrap.style.display='block';
-  if(cntEl)cntEl.textContent=String((S.WHATS_NEW||[]).length);
+  if(cntEl)cntEl.textContent=String(items.length);
   list.innerHTML=items.map(it=>{
     const when=it.at?(new Date(it.at).toLocaleDateString()+', '+new Date(it.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})):'';
     const tagCls=it.panel==='guest'?'hn-tag guest':(it.panel==='requester'?'hn-tag requester':'hn-tag');
