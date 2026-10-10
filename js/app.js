@@ -1708,6 +1708,8 @@ function areaGateOk(ctx){ const a=currentMusicArea(); return !!a && a===ctx; }
 // Pause the shared audio element whenever the loaded track belongs to an area
 // that is no longer open/visible (e.g. card hidden behind the slideshow,
 // slideshow closed, back-to-home, tab switched). Safe to call often.
+// HD1.5: also re-checks the per-song 'where' selection — a song may only keep
+// playing while its OWN selected area is the one currently on screen.
 function enforceAreaMusicGate(){
   try{
     const a=$('audioPlayer');
@@ -1718,9 +1720,30 @@ function enforceAreaMusicGate(){
     const inList=(CURR_LIST&&CURR_LIST.length&&CURR_LIST.includes(cur));
     if((inOwn||inList)&&area!==CURR_CTX){
       a.pause(); MUSIC_ON=false;
+      const mt=$('musicToggle'); if(mt)mt.textContent='🔇'; return;
+    }
+    // STRICT per-area rule: the loaded URL must still be allowed in the visible area.
+    if(area && SS_isAllowedInArea(cur,area))return;
+    if(area && (inOwn||inList)){
+      a.pause(); MUSIC_ON=false;
       const mt=$('musicToggle'); if(mt)mt.textContent='🔇';
     }
   }catch(e){}
+}
+// HD1.5: is this exact audio URL one of the songs whose "Play in" selection
+// includes the given area ('card' | 'slideshow' | 'private')?
+function SS_isAllowedInArea(url,area){
+  try{
+    if(!url||!area)return false;
+    const s=S.CURR.shared||{};
+    for(let i=1;i<=5;i++){
+      if(String(s['song'+i+'_on'])!=='true')continue;
+      const u=(s['song'+i+'_url']||'').trim();
+      if(!u||u!==url)continue;
+      if(songAllowedIn(s,i,area))return true;
+    }
+    return false;
+  }catch(e){ return false; }
 }
 // FIX 6b: master context switch. Every background-music action (autoplay, toggle
 // button, slideshow engine) is gated through these two helpers so a song selected
@@ -1731,29 +1754,14 @@ function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloa
 // v2.8: the slideshow engine's actual music context — 'private' when the
 // "Open Our Private Memories" slideshow is open, otherwise 'slideshow'.
 function SS_musicCtx(){ return (SS_isOpen&&SS_CTX==='private')?'private':'slideshow'; }
-// v2.8b ROBUST private-slideshow music: even if the slideshow engine's context flag
-// was lost (session restore, reopen race, etc.), whenever a track that is explicitly
-// marked 'private' is NOT currently playing and the audio element is idle while the
-// slideshow is open, treat the slideshow as the PRIVATE one so its dedicated song plays.
-// A normal memories slideshow can never play such a track (buildPlaylistFor('slideshow')
-// excludes where='private' songs), so this fallback is safe.
+// HD1.5 STRICT AREA SELECTION: the slideshow engine ALWAYS uses exactly the area
+// the user opened — 'slideshow' for "Open Our Memories", 'private' for
+// "Open Our Private Memories". The old heuristic that re-resolved a normal
+// slideshow to 'private' just because a private-only song existed has been
+// REMOVED: it made a song selected for the Private Slideshow play inside the
+// normal Memories slideshow, which is not allowed any more.
 function SS_musicCtxSafe(){
-  const mctx=SS_musicCtx();
-  if(mctx==='slideshow'&&SS_isOpen){
-    const s=S.CURR.shared||{};
-    let hasPrivOnly=false;
-    for(let i=1;i<=5;i++){
-      if(String(s['song'+i+'_on'])==='true'&&(s['song'+i+'_url']||'').trim()&&String(s['song'+i+'_where']||'')==='private'){hasPrivOnly=true;break;}
-    }
-    if(hasPrivOnly){
-      const a=$('audioPlayer');
-      const cur=(a&&(a.currentSrc||a.src))||'';
-      const privList=buildPlaylistFor('private');
-      const playingPriv=privList.length&&cur&&privList.includes(cur)&&a&&!a.paused;
-      if(!playingPriv)return 'private';
-    }
-  }
-  return mctx;
+  return SS_musicCtx();
 }
 
 // v2.8 CONTEXT MAP — every internal music context used by the engine:
@@ -1762,32 +1770,36 @@ function SS_musicCtxSafe(){
 //   'private'         -> OPEN OUR PRIVATE MEMORIES slideshow (v2.8 — its own song)
 //   'video'/'videomusic' -> volume-only contexts (no playlists)
 // UI option values map onto these contexts as follows:
-//   Card / Slideshow / Private slideshow / Both / Everywhere (Card + Slideshow) / Any slideshow (Slideshow + Private)
+//   Card / Slideshow / Private slideshow / Both
+// HD1.5 STRICT AREA SELECTION: the three selectable areas are exactly
+//   'card'      -> the greeting card screen
+//   'slideshow' -> the "Open Our Memories" slideshow
+//   'private'   -> the "Open Our Private Memories" slideshow
+// A song picked for one area plays ONLY there and never leaks into another.
 const SS_UI_PLACES=['card','slideshow','private'];
 function expandWhere(w){
   w=String(w||'').trim();
-  if(!w)return ['card','slideshow','private'];
-  if(w==='everywhere')return ['card','slideshow'];
+  if(!w)return ['card','slideshow','private'];           // unset -> all areas
+  if(w==='everywhere'||w==='all')return ['card','slideshow','private'];
   if(w==='any-slideshow'||w==='anyslideshow')return ['slideshow','private'];
-  if(w==='all')return ['card','slideshow','private'];
-  // v2.7-compatible value: a song chosen for the normal slideshow also plays in
-  // the private slideshow UNLESS the couple set a dedicated private song.
-  if(w==='slideshow')return ['slideshow','private'];
+  if(w==='both')return ['card','slideshow','private'];   // "Both" = every area
+  // STRICT (HD1.5): 'card' stays on the card, 'slideshow' stays in Open Our
+  // Memories, 'private' stays in Open Our Private Memories. No cross-fallback.
   return [w];
 }
 // Engine context ('card' | 'slideshow' | 'private') -> which UI "Play in" options include it.
 const SS_CTX_ACCEPTS={
-  card:['card','both','everywhere'],
-  slideshow:['slideshow','both','everywhere','any-slideshow','anyslideshow','all'],
-  private:['private','slideshow','both','any-slideshow','anyslideshow','all']
+  card:['card','both','everywhere','all'],
+  slideshow:['slideshow','both','any-slideshow','anyslideshow','everywhere','all'],
+  private:['private','both','any-slideshow','anyslideshow','everywhere','all']
 };
-// FIX 6b: per-song 'where' is the SOLE, AUTHORITATIVE placement selector.
+// FIX 6b / HD1.5: per-song 'where' is the SOLE, AUTHORITATIVE placement selector.
 // Whatever the admin picks in the lock panel's "Play in" dropdown for a song is
 // exactly where that song plays — nowhere else:
-//   song 'card'            -> plays ONLY on the greeting card
-//   song 'slideshow'       -> plays in the memories slideshow AND (fallback) the private slideshow
-//   song 'private' (v2.8)  -> plays ONLY inside "Open Our Private Memories"
-//   song 'both'            -> plays everywhere
+//   song 'card'            -> plays ONLY while the greeting card is open
+//   song 'slideshow'       -> plays ONLY inside the "Open Our Memories" slideshow
+//   song 'private'         -> plays ONLY inside "Open Our Private Memories"
+//   song 'both'            -> plays in all three areas (still only when open)
 // The legacy global 'music_mode' radio is intentionally NOT consulted any more,
 // so a saved value of music_mode can never make a song leak into another section.
 function songAllowedIn(s,i,ctx){
@@ -1869,8 +1881,10 @@ $('audioPlayer').addEventListener('ended',()=>{
   if(!MUSIC_ON)return;
   // FIX 6b: track finished — advance within the playlist of the CURRENT place only.
   if(SS_isOpen){
-    const mctx=SS_musicCtxSafe(); // v2.8b: 'private' inside Open Our Private Memories
-    if(musicAllowedInCtx(mctx)||buildPlaylistFor('private').length){ SS_nextTrackIfOwn(); if(!($('audioPlayer').src&&($('audioPlayer').currentSrc||'')))SS_ensureMusicPlaying(); }
+    const mctx=SS_musicCtxSafe(); // HD1.5: exactly the area that is open ('slideshow' or 'private')
+    // STRICT: only songs selected for THIS area advance here; a private-only song
+    // never continues inside the normal slideshow and vice-versa.
+    if(musicAllowedInCtx(mctx)){ SS_nextTrackIfOwn(); if(!($('audioPlayer').src&&($('audioPlayer').currentSrc||'')))SS_ensureMusicPlaying(); }
     else { $('audioPlayer').pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
   }
@@ -2133,16 +2147,12 @@ function SS_ensureMusicPlaying(){
       return;
     }
   }
-  const mctx=SS_musicCtxSafe(); // v2.8b: robustly resolve 'private' vs 'slideshow' playlist
+  const mctx=SS_musicCtxSafe(); // HD1.5: exactly the open area — 'slideshow' or 'private'
   const ssList=buildPlaylistFor(mctx);   // filtered by the per-song 'Play in' dropdown only
   let wantList=ssList;
-  // v2.8b SAFETY NET: if the resolved context has NO songs but the PRIVATE slideshow
-  // does have a dedicated song, fall back to the private playlist so the couple's
-  // chosen private-memory song ALWAYS plays (same behavior as the normal slideshow).
-  if(!wantList.length){
-    const privList=buildPlaylistFor('private');
-    if(privList.length){wantList=privList;}
-  }
+  // STRICT (HD1.5): NO cross-area fallback. If nothing is selected for this exact
+  // area, stay silent here rather than borrowing the private slideshow's song
+  // (or the normal slideshow's song) in the other area.
   if(!wantList || !wantList.length){
     if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
@@ -2539,12 +2549,11 @@ function SS_updateSlide(){
     const pb=$('slideshowProgress');
     if(pb){ pb.style.transition='none'; pb.style.width='0%'; }
   }else{
-    // FIXED (v2): obey the per-song 'where' selection when resuming music on a non-video slide.
+    // FIXED (v2 / HD1.5 STRICT): obey the per-song 'where' selection when resuming
+    // music on a non-video slide — only songs selected for THIS exact area play.
     const a=$('audioPlayer');
-    let mctx=SS_musicCtxSafe(); // v2.8b: robustly resolve private vs slideshow
+    let mctx=SS_musicCtxSafe(); // 'slideshow' or 'private' — exactly what is open
     let ssList=buildPlaylistFor(mctx);
-    // v2.8b SAFETY NET: private slideshow always plays its dedicated song.
-    if(!ssList.length){const pl=buildPlaylistFor('private');if(pl.length){mctx='private';ssList=pl;}}
     if(!ssList.length){
       // Nothing is allowed to play in this context -> stay silent.
       if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
@@ -2677,7 +2686,7 @@ document.addEventListener('keydown',(e)=>{
   else if(e.key==='Escape')SS_close();
 });
 
-document.addEventListener('visibilitychange',()=>{
+document.addEventListener('visibilitychange',()=>{ enforceAreaMusicGate();
   const now = Date.now();
   if (now - SS_lastVisibilityChange < 500) return;
   SS_lastVisibilityChange = now;
@@ -2693,16 +2702,17 @@ document.addEventListener('visibilitychange',()=>{
     const a=$('audioPlayer');if(a)a.pause();
   }else if(SS_isOpen){
     const a=$('audioPlayer');
-    // FIX 6b: resume ONLY slideshow-selected songs, and only if the track that is
-    // loaded actually belongs to the slideshow playlist (never a card-only song).
-    if(a&&a.src&&(musicAllowedInCtx(SS_musicCtxSafe())||buildPlaylistFor('private').length)){
+    // FIX 6b / HD1.5 STRICT: resume ONLY songs selected for the area that is open
+    // right now, and only if the loaded track belongs to that area's playlist
+    // (never a card-only song, never the other slideshow's song).
+    const mctx=SS_musicCtxSafe(); // 'slideshow' or 'private' — exactly what is open
+    if(a&&a.src&&musicAllowedInCtx(mctx)){
       const curSrc=a.currentSrc||a.src||'';
-      const mctx=SS_musicCtxSafe(); // v2.8b: private slideshow has its own song list
-    let ssList=buildPlaylistFor(mctx);
-      if(!ssList.length){const pl=buildPlaylistFor('private');if(pl.length)ssList=pl;}
+      let ssList=buildPlaylistFor(mctx);
       if(ssList.includes(curSrc)){ a.volume=getVol(mctx); a.play().catch(()=>{}); }
       else { SS_ensureMusicPlaying(); }
     }
+    else if(a&&!a.paused){ a.pause(); MUSIC_ON=false; const mt=$('musicToggle'); if(mt)mt.textContent='🔇'; }
     const cur = SS[SS_IDX];
     if(cur && cur.type !== 'video'){
       if(!SS_T){
@@ -5324,6 +5334,14 @@ async function boot(){
     }catch(e){}
   })();
   if(SS_restoreSession && SS_restoreSession()) return;
+  // HD1.5 AREA GUARD: a selected song may only be audible while ITS OWN area is
+  // actually open on screen (card / Open Our Memories / Open Our Private
+  // Memories). This lightweight watchdog pauses the shared audio element the
+  // moment the playing track's area stops being the visible one — e.g. the
+  // slideshow was closed, the user went back to the home screen, an opening/lock
+  // modal covers the card, or the tab moved to the background. It never starts
+  // music by itself; starting stays tied to the area-open events.
+  try{ setInterval(enforceAreaMusicGate,700); }catch(e){}
   await checkWipe();
   await loadReviews();
   setInterval(checkWipe,60000);
