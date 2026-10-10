@@ -362,7 +362,7 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="geMediaRepeater"></div>
     <button type="button" class="repeat-add" id="geAddMediaRow">➕ Add Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="ge_bulkMediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste — auto-split: direct http links → Videos, Drive IDs → Photos (comma / newline separated)</label><textarea class="panel-textarea" id="ge_bulkMediaIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="geBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
@@ -372,7 +372,7 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="gePrivateRepeater"></div>
     <button type="button" class="repeat-add" id="geAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="ge_bulkPrivateIds" placeholder="id1, id2, id3"></textarea></div>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste — auto-split: direct http links → Videos, Drive IDs → Photos (comma / newline separated)</label><textarea class="panel-textarea" id="ge_bulkPrivateIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="geBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
@@ -476,7 +476,7 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="reMediaRepeater"></div>
     <button type="button" class="repeat-add" id="reAddMediaRow">➕ Add Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="re_bulkMediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste — auto-split: direct http links → Videos, Drive IDs → Photos (comma / newline separated)</label><textarea class="panel-textarea" id="re_bulkMediaIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="reBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
@@ -486,7 +486,7 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="rePrivateRepeater"></div>
     <button type="button" class="repeat-add" id="reAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste Drive IDs (comma separated)</label><textarea class="panel-textarea" id="re_bulkPrivateIds" placeholder="id1, id2, id3"></textarea></div>
+    <div class="panel-field" style="margin-top:.4rem;"><label class="panel-label">Bulk paste — auto-split: direct http links → Videos, Drive IDs → Photos (comma / newline separated)</label><textarea class="panel-textarea" id="re_bulkPrivateIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="reBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
@@ -1019,8 +1019,8 @@
     <div class="panel-section-title">📸 Slideshow Photos &amp; Videos</div>
     <div id="guestMediaRepeater"></div>
     <button type="button" class="repeat-add" id="guestAddMediaRow">➕ Add Photo/Video Row</button>
-    <div style="margin-top:.5rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Or paste many Drive IDs below (comma-separated) to bulk-add.</div>
-    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_mediaIds" placeholder="id1, id2, id3"></textarea></div>
+    <div style="margin-top:.5rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Or paste many items below (comma or newline separated) to bulk-add — <strong>direct http/https links are auto-added as Videos</strong> and <strong>Drive IDs are auto-added as Photos</strong>.</div>
+    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_mediaIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="guestBulkAddMedia" style="background:#2a5fd1;">📥 Add all IDs above</button>
   </div>
 </div>
@@ -1030,7 +1030,7 @@
     <div style="margin-bottom:.6rem;font-size:.78rem;color:var(--c-text-muted);font-style:italic;">Private media appears <strong>only</strong> on the “📸📸 Open Our Private Memories” button — never in the regular “Open Our Memories” slideshow. All rules and playback functions are identical.</div>
     <div id="guestPrivateRepeater"></div>
     <button type="button" class="repeat-add" id="guestAddPrivateRow">➕ Add Private Photo/Video Row</button>
-    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_privateIds" placeholder="id1, id2, id3"></textarea></div>
+    <div class="panel-field" style="margin-top:.4rem;"><textarea class="panel-textarea" id="g_privateIds" placeholder="https://...direct-link.mp4, 1AbCdEfGhIjKlMnOpQrStUvWxYz, https://...video.mp4, 2BcDeFgHiJkLmNoPqRsTuVwXyZaBc"></textarea></div>
     <button type="button" class="repeat-add" id="guestBulkAddPrivate" style="background:#8b0028;">📥 Add all IDs above</button>
   </div>
 </div>
