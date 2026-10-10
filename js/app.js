@@ -1116,7 +1116,34 @@ let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
 // for the card can NEVER be heard outside the card and vice-versa.
 function musicAllowedInCtx(ctx){ return buildPlaylistFor(ctx).length>0; }
 function musicGuard(ctx){ return musicAllowedInCtx(ctx); }
-function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
+function getVol(ctx){const s=S.CURR.shared||{};if(ctx==='video')return parseFloat(s.vol_video)||1.0;if(ctx==='videomusic')return parseFloat(s.vol_video_music)||0.35;if(ctx==='private')return parseFloat(s.vol_private!==undefined&&s.vol_private!==''?s.vol_private:s.vol_slide)||0.85;if(ctx==='slideshow')return parseFloat(s.vol_slide)||0.85;return parseFloat(s.vol_card)||0.45}
+// v2.8: the slideshow engine's actual music context — 'private' when the
+// "Open Our Private Memories" slideshow is open, otherwise 'slideshow'.
+function SS_musicCtx(){ return (SS_isOpen&&SS_CTX==='private')?'private':'slideshow'; }
+// v2.8b ROBUST private-slideshow music: even if the slideshow engine's context flag
+// was lost (session restore, reopen race, etc.), whenever a track that is explicitly
+// marked 'private' is NOT currently playing and the audio element is idle while the
+// slideshow is open, treat the slideshow as the PRIVATE one so its dedicated song plays.
+// A normal memories slideshow can never play such a track (buildPlaylistFor('slideshow')
+// excludes where='private' songs), so this fallback is safe.
+function SS_musicCtxSafe(){
+  const mctx=SS_musicCtx();
+  if(mctx==='slideshow'&&SS_isOpen){
+    const s=S.CURR.shared||{};
+    let hasPrivOnly=false;
+    for(let i=1;i<=5;i++){
+      if(String(s['song'+i+'_on'])==='true'&&(s['song'+i+'_url']||'').trim()&&String(s['song'+i+'_where']||'')==='private'){hasPrivOnly=true;break;}
+    }
+    if(hasPrivOnly){
+      const a=$('audioPlayer');
+      const cur=(a&&(a.currentSrc||a.src))||'';
+      const privList=buildPlaylistFor('private');
+      const playingPriv=privList.length&&cur&&privList.includes(cur)&&a&&!a.paused;
+      if(!playingPriv)return 'private';
+    }
+  }
+  return mctx;
+}
 
 // v2.8 CONTEXT MAP — every internal music context used by the engine:
 //   'card'            -> greeting card background music
@@ -1221,7 +1248,8 @@ $('audioPlayer').addEventListener('ended',()=>{
   if(!MUSIC_ON)return;
   // FIX 6b: track finished — advance within the playlist of the CURRENT place only.
   if(SS_isOpen){
-    if(musicAllowedInCtx('slideshow')){ SS_nextTrackIfOwn(); if(!($('audioPlayer').src&&($('audioPlayer').currentSrc||'')))SS_ensureMusicPlaying(); }
+    const mctx=SS_musicCtxSafe(); // v2.8b: 'private' inside Open Our Private Memories
+    if(musicAllowedInCtx(mctx)||buildPlaylistFor('private').length){ SS_nextTrackIfOwn(); if(!($('audioPlayer').src&&($('audioPlayer').currentSrc||'')))SS_ensureMusicPlaying(); }
     else { $('audioPlayer').pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
   }
@@ -1230,12 +1258,16 @@ $('audioPlayer').addEventListener('ended',()=>{
 $('musicToggle').onclick=()=>{
   // FIX 6b: the toggle button only ever controls music of the CURRENT place.
   // If no song is selected for this place, the button does nothing (no wrong-place audio).
-  const ctx=(SS_isOpen?'slideshow':CURR_CTX)||'card';
+  // v2.8: while the PRIVATE memories slideshow is open, the toggle controls the
+  // 'private' playlist so its own dedicated song plays/pauses here.
+  const ctx=(SS_isOpen?SS_musicCtx():CURR_CTX)||'card';
   if(!musicGuard(ctx)){const mt=$('musicToggle');if(mt)mt.textContent='🔇';return;}
-  const list=(ctx==='slideshow'&&SS_ownPlaylist.length)?SS_ownPlaylist:buildPlaylistFor(ctx);
-  if(ctx==='slideshow'){CURR_CTX='slideshow';CURR_LIST=list;}
+  const list=(ctx!=='card'&&buildPlaylistFor(ctx).length)?buildPlaylistFor(ctx):buildPlaylistFor('card');
+  if(ctx==='slideshow'||ctx==='private'){CURR_CTX=ctx;CURR_LIST=list;CURR_IDX=-1;if(SS_ownPlaylist!==list){SS_ownPlaylist=list;SS_ownIdx=-1;}}
   else if(CURR_CTX!=='card'){CURR_CTX='card';CURR_LIST=buildPlaylistFor('card');CURR_IDX=-1;}
   const a=$('audioPlayer');
+  // v2.8: if the loaded track doesn't belong to this place's playlist, load the right one first.
+  if(a.src&&CURR_LIST.length&&!CURR_LIST.includes(a.currentSrc||a.src)){a.pause();a.src=CURR_LIST[0];a.volume=getVol(CURR_CTX);MUSIC_ON=false;}
   if(!a.src&&CURR_LIST.length){a.src=CURR_LIST[0];a.volume=getVol(CURR_CTX);}
   if(MUSIC_ON&&!a.paused){a.pause();MUSIC_ON=false;$('musicToggle').textContent='🔇'}
   else{MUSIC_ON=true;a.play().catch(()=>{});$('musicToggle').textContent='🔊'}
@@ -1425,7 +1457,7 @@ function SS_fadeMusic(target,duration){
     if(i>=steps){clearInterval(a._ssFadeTimer);a._ssFadeTimer=null;a.volume=target;}
   },30);
 }
-function SS_normalMusicVol(){ return getVol('slideshow'); }
+function SS_normalMusicVol(){ return getVol(SS_musicCtx()); }
 function SS_duckedMusicVol(){ return Math.max(0.05,SS_normalMusicVol()*0.35); }
 // musicDuringVideo: when ON, background music keeps playing under video slides at vol_video_music (default 0.35) instead of ducking to 40%.
 function SS_isMusicDuringVideo(){ return String((S.CURR.shared||{}).musicDuringVideo)==='true'; }
@@ -1439,8 +1471,16 @@ function SS_musicTargetVol(){ return SS_isMusicDuringVideo()?getVol('videomusic'
 function SS_ensureMusicPlaying(){
   const a=$('audioPlayer');
   if(!a)return;
-  const ssList=buildPlaylistFor('slideshow');   // filtered by the per-song 'Play in' dropdown only
-  const wantList=ssList;
+  const mctx=SS_musicCtxSafe(); // v2.8b: robustly resolve 'private' vs 'slideshow' playlist
+  const ssList=buildPlaylistFor(mctx);   // filtered by the per-song 'Play in' dropdown only
+  let wantList=ssList;
+  // v2.8b SAFETY NET: if the resolved context has NO songs but the PRIVATE slideshow
+  // does have a dedicated song, fall back to the private playlist so the couple's
+  // chosen private-memory song ALWAYS plays (same behavior as the normal slideshow).
+  if(!wantList.length){
+    const privList=buildPlaylistFor('private');
+    if(privList.length){wantList=privList;}
+  }
   if(!wantList || !wantList.length){
     if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     return;
@@ -1454,30 +1494,45 @@ function SS_ensureMusicPlaying(){
   if(a.paused || !a.src || !wantList.includes(a.currentSrc||a.src||'')){
     SS_ownPlaylist=wantList;
     SS_ownIdx=0;
-    a.src=wantList[0];
     a.loop=false;
-    a.volume=getVol('slideshow');
-    CURR_CTX='slideshow';CURR_LIST=wantList;CURR_IDX=0;
-    a.play().then(()=>{
-      MUSIC_ON=true;
-      $('musicToggle').textContent='🔊';
-      $('musicToggle').classList.add('visible');
-    }).catch(()=>{
-      MUSIC_ON=false;
-    });
+    a.volume=getVol(mctx);
+    CURR_CTX=mctx;CURR_LIST=wantList;CURR_IDX=0;
+    const startPlay=()=>{
+      a.play().then(()=>{
+        MUSIC_ON=true;
+        $('musicToggle').textContent='🔊';
+        $('musicToggle').classList.add('visible');
+      }).catch(()=>{
+        // v2.8b: autoplay can be blocked until the src is fully loaded — retry once on 'canplay'.
+        const retry=()=>{ a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';$('musicToggle').classList.add('visible');}).catch(()=>{MUSIC_ON=false;}); };
+        if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); a.load(); }
+        else retry();
+        MUSIC_ON=false;
+      });
+    };
+    // v2.8b: only RE-assign src when it actually differs — re-assigning the same
+    // URL would reset/pause the element and silently kill playback.
+    if(a.src!==wantList[0]){ a.src=wantList[0]; }
+    startPlay();
     return;
   }
   if(ssList.length && SS_musicDucked!==true){
-    a.volume=getVol('slideshow');
+    a.volume=getVol(mctx);
   }
 }
 function SS_nextTrackIfOwn(){
   const a=$('audioPlayer');
   if(!a)return;
+  // v2.8b: if the own-playlist was lost (e.g. session restore), rebuild it for the
+  // resolved context so the private slideshow's song keeps playing after each track ends.
+  if(!SS_ownPlaylist || !SS_ownPlaylist.length){
+    const rb=buildPlaylistFor(SS_musicCtxSafe());
+    if(rb.length){SS_ownPlaylist=rb;SS_ownIdx=-1;}
+  }
   if(!SS_ownPlaylist || !SS_ownPlaylist.length)return;
   SS_ownIdx=(SS_ownIdx+1)%SS_ownPlaylist.length;
   a.src=SS_ownPlaylist[SS_ownIdx];
-  a.volume=getVol('slideshow');
+  a.volume=getVol(SS_musicCtx());
   a.play().catch(()=>{});
 }
 
@@ -1824,7 +1879,10 @@ function SS_updateSlide(){
   }else{
     // FIXED (v2): obey the per-song 'where' selection when resuming music on a non-video slide.
     const a=$('audioPlayer');
-    const ssList=buildPlaylistFor('slideshow');
+    let mctx=SS_musicCtxSafe(); // v2.8b: robustly resolve private vs slideshow
+    let ssList=buildPlaylistFor(mctx);
+    // v2.8b SAFETY NET: private slideshow always plays its dedicated song.
+    if(!ssList.length){const pl=buildPlaylistFor('private');if(pl.length){mctx='private';ssList=pl;}}
     if(!ssList.length){
       // Nothing is allowed to play in this context -> stay silent.
       if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
@@ -1832,8 +1890,8 @@ function SS_updateSlide(){
       // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
       const curSrc=a.currentSrc||a.src||'';
       const isOwn=(SS_ownPlaylist.length&&SS_ownPlaylist.includes(curSrc));
-      if((CURR_LIST.length && CURR_CTX==='slideshow' && ssList.includes(curSrc)) || isOwn){
-        a.volume=getVol('slideshow');
+      if((CURR_LIST.length && (CURR_CTX==='slideshow'||CURR_CTX==='private') && ssList.includes(curSrc)) || isOwn){
+        a.volume=getVol(mctx);
         a.play().catch(()=>{});
         MUSIC_ON=true;
         $('musicToggle').textContent='🔊';
@@ -1850,7 +1908,7 @@ function SS_updateSlide(){
       if(!ssList.includes(curSrc)){
         SS_ensureMusicPlaying();
       } else {
-        a.volume=getVol('slideshow');
+        a.volume=getVol(mctx);
       }
     }
     if(SS_musicDucked!==false){
@@ -1975,10 +2033,12 @@ document.addEventListener('visibilitychange',()=>{
     const a=$('audioPlayer');
     // FIX 6b: resume ONLY slideshow-selected songs, and only if the track that is
     // loaded actually belongs to the slideshow playlist (never a card-only song).
-    if(a&&a.src&&musicAllowedInCtx('slideshow')){
+    if(a&&a.src&&(musicAllowedInCtx(SS_musicCtxSafe())||buildPlaylistFor('private').length)){
       const curSrc=a.currentSrc||a.src||'';
-      const ssList=buildPlaylistFor('slideshow');
-      if(ssList.includes(curSrc)){ a.volume=getVol('slideshow'); a.play().catch(()=>{}); }
+      const mctx=SS_musicCtxSafe(); // v2.8b: private slideshow has its own song list
+    let ssList=buildPlaylistFor(mctx);
+      if(!ssList.length){const pl=buildPlaylistFor('private');if(pl.length)ssList=pl;}
+      if(ssList.includes(curSrc)){ a.volume=getVol(mctx); a.play().catch(()=>{}); }
       else { SS_ensureMusicPlaying(); }
     }
     const cur = SS[SS_IDX];
@@ -2246,9 +2306,10 @@ function fillAdminFields(){
   const fd=$('f_floaterDensity');
   if(fd){ fd.value=(sh.floaterDensity!==undefined?sh.floaterDensity:'1'); const el=$('f_floaterDensity_val'); if(el)el.textContent=fd.value; }
   document.querySelectorAll('input[name="music_mode"]').forEach(r=>{r.checked=(r.value===(sh.music_mode||'both'))});
-  for(let i=1;i<=5;i++){ const onEl=$('f_song'+i+'_on');if(onEl)onEl.checked=(String(sh['song'+i+'_on'])==='true'); set('f_song'+i+'_url',sh['song'+i+'_url']); const wEl=$('f_song'+i+'_where');if(wEl)wEl.value=sh['song'+i+'_where']||'both'; }
+  for(let i=1;i<=5;i++){ const onEl=$('f_song'+i+'_on');if(onEl)onEl.checked=(String(sh['song'+i+'_on'])==='true'); set('f_song'+i+'_url',sh['song'+i+'_url']); const wEl=$('f_song'+i+'_where');if(wEl){ const wv=sh['song'+i+'_where']||'both'; // v2.8b: if a saved value isn't present in this build's dropdown (e.g. legacy 'everywhere'), fall back to the first option instead of silently defaulting to 'Both'.
+      wEl.value=wv; if(wEl.value!==wv){ wEl.selectedIndex=0; } } }
   const v=(id,key,def)=>{const el=$(id);if(!el)return;el.value=sh[key]||def;const lab=$(id+'_val');if(lab)lab.textContent=el.value};
-  v('f_vol_card','vol_card','0.45');v('f_vol_slide','vol_slide','0.85');v('f_vol_video','vol_video','1.0');
+  v('f_vol_card','vol_card','0.45');v('f_vol_slide','vol_slide','0.85');v('f_vol_private','vol_private','0.85');v('f_vol_video','vol_video','1.0');
   v('f_vol_video_music','vol_video_music','0.35');
   tgl('f_musicDuringVideo',sh.musicDuringVideo);
   v('f_pinSlideDuration','pinSlideDuration','4');v('f_storySlideDuration','storySlideDuration','10');
@@ -2295,7 +2356,7 @@ function readAdminFields(){
   sh.floaterDensity=fd?fd.value:'1';
   document.querySelectorAll('input[name="music_mode"]').forEach(r=>{if(r.checked)sh.music_mode=r.value});
   for(let i=1;i<=5;i++){ sh['song'+i+'_on']=(($('f_song'+i+'_on')||{}).checked)?'true':'false'; sh['song'+i+'_url']=g('f_song'+i+'_url'); sh['song'+i+'_where']=(($('f_song'+i+'_where')||{}).value)||'both'; }
-  sh.vol_card=g('f_vol_card');sh.vol_slide=g('f_vol_slide');sh.vol_video=g('f_vol_video');
+  sh.vol_card=g('f_vol_card');sh.vol_slide=g('f_vol_slide');sh.vol_private=g('f_vol_private');sh.vol_video=g('f_vol_video');
   sh.vol_video_music=g('f_vol_video_music');
   sh.musicDuringVideo=tgl('f_musicDuringVideo');
   sh.pinSlideDuration=g('f_pinSlideDuration');sh.storySlideDuration=g('f_storySlideDuration');
@@ -2308,7 +2369,7 @@ document.querySelectorAll('#themeGrid .theme-swatch').forEach(el=>{
   el.onclick=()=>{ S.CURR.shared.theme=el.dataset.themePick; document.querySelectorAll('#themeGrid .theme-swatch').forEach(x=>x.classList.toggle('selected',x===el)); document.body.setAttribute('data-theme',el.dataset.themePick); };
 });
 document.addEventListener('input',(e)=>{
-  ['f_vol_card','f_vol_slide','f_vol_video','f_vol_video_music','f_pinSlideDuration','f_storySlideDuration','f_effectsIntensity'].forEach(id=>{
+  ['f_vol_card','f_vol_slide','f_vol_private','f_vol_video','f_vol_video_music','f_pinSlideDuration','f_storySlideDuration','f_effectsIntensity'].forEach(id=>{
     if(e.target&&e.target.id===id){const lab=$(id+'_val');if(lab)lab.textContent=e.target.value}
   });
   if(e.target&&e.target.id==='f_floaterDensity'){const lab=$('f_floaterDensity_val');if(lab)lab.textContent=e.target.value}
@@ -2656,7 +2717,7 @@ async function openPersonDetails(p){
   h+='</div>';
   h+='<div class="detail-block"><div class="detail-block-title">🎨 Theme & Features</div>'
     + row('Theme',shared.theme||'(default: romantic)') + row('Default language',shared.defaultLang||'(default: en)') + row('Music mode',shared.music_mode)
-    + row('Card volume',shared.vol_card) + row('Slideshow volume',shared.vol_slide) + row('Video volume',shared.vol_video)
+    + row('Card volume',shared.vol_card) + row('Slideshow volume',shared.vol_slide) + row('Private Slideshow volume',shared.vol_private) + row('Video volume',shared.vol_video)
     + row('Photo duration (sec)',shared.photoDurationSec)
     + row('Slide effects enabled',shared.slideEffectsEnabled==='true'?'✅ On':'❌ Off')
     + row('Effects intensity',shared.effectsIntensity)
@@ -3313,7 +3374,7 @@ async function approveGuestRow(r,overridePassword,skipStatusUpdate){
     });
     if(gs.unlockDateISO!==undefined)settings['shared__unlockDateISO']=gs.unlockDateISO;
     if(gs.unlockDateISO_tz!==undefined)settings['shared__unlockDateISO_tz']=gs.unlockDateISO_tz;
-    ['enableFireworks','enableUpload','showLockScreen','music_mode','vol_card','vol_slide','vol_video',
+    ['enableFireworks','enableUpload','showLockScreen','music_mode','vol_card','vol_slide','vol_private','vol_video',
      'pinSlideshowEnabled','pinSlideDuration','pinSlideDefaultSec','storySlideshowEnabled','storySlideDuration','storySlideDefaultSec',
      'photoDurationSec','shuffleMusicOn','shuffleMediaOn','musicOrder','mediaOrder',
      'slideEffectsEnabled','effectsIntensity','floatersEnabled','floaterDensity',
