@@ -179,7 +179,10 @@ window.__popConfirm=function(message,opts){
     if(opts.danger){ okBtn.classList.remove('ok'); okBtn.style.background='linear-gradient(135deg,#c41e3a,#8b0028)'; okBtn.style.color='#fff'; }
     if(opts.wa){ okBtn.classList.remove('ok'); okBtn.classList.add('wa'); }
     setTimeout(()=>{try{okBtn.focus()}catch(e){}},60);
-    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);} },80);
+    // BUGFIX: this poll used to only clear itself and NEVER resolve `res` — every awaited
+    // confirm() hung forever (and the 80ms interval leaked). Resolve when the layer closes.
+    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);res(false)} },80);
+    s.layer._done=()=>{clearInterval(wait);res(false)};
   });
 };
 window.__popPrompt=function(message,value,opts){
@@ -190,7 +193,10 @@ window.__popPrompt=function(message,value,opts){
     s.btn(opts.okText||'OK','ok',undefined);
     const okBtn=s.layer.querySelectorAll('.pop-btn')[1];
     okBtn.onclick=()=>{ s.close(s.input.value); };
-    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);res(null)} },80);
+    // BUGFIX: resolve with the typed value when OK/Enter closes the popup — previously it
+    // always resolved null via polling, so prompt answers were silently thrown away.
+    const wait=setInterval(()=>{ if(!s.layer.classList.contains('active')){clearInterval(wait);res(s.input.value||null)} },80);
+    s.layer._done=()=>{clearInterval(wait);res(s.input.value||null)};
   });
 };
 /* Synchronous, non-native replacements for alert/confirm/prompt. They paint the
@@ -594,6 +600,11 @@ async function wipeOnePerson(pid){
   }catch(e){console.warn('[wipe] failed for '+pid,e.message)}
 }
 async function checkWipe(){
+  // PERF: only one maintenance pass may run at a time. The old code re-fetched people/guests/
+  // ledger from the cloud on every 60s tick even while the previous pass was still awaiting —
+  // overlapping passes multiplied the network load and could double-wipe people.
+  if(window.__checkWipeRunning)return;
+  window.__checkWipeRunning=true;
   try{
     await sb.wipeExpired();
     const all=await sb.people()||[];
@@ -607,7 +618,9 @@ async function checkWipe(){
     // (and in the admin 💐 Finished tab) without any admin action.
     // People already deleted from `people` by the server-side wipe_expired_people RPC are
     // recovered from their linked guest submission rows so nothing is ever missed.
+    // PERF: fetch the guest rows ONCE per pass (the old code requested them twice).
     let gRows=null;
+    try{ gRows=(await sb.guests())||[]; }catch(e){ gRows=[]; }
     const slugOfRow=r=>{const pl=r.payload||{};const prop=pl.person_proposal||{};return String(r.approved_login_id||prop.slug||r.target_person_slug||'').toLowerCase()};
     const duePeople=all.filter(p=>{
       if(!p.wipe_iso)return false;
@@ -622,7 +635,6 @@ async function checkWipe(){
         finished_manually:false,wiped_at:p.wipe_iso}))finishedChanged=true;
     });
     try{
-      gRows=(await sb.guests())||[];
       const liveSlugs={};all.forEach(p=>{if(p.slug)liveSlugs[String(p.slug).toLowerCase()]=true});
       gRows.filter(r=>r.status==='approved').forEach(r=>{
         const s=slugOfRow(r);
@@ -666,8 +678,7 @@ async function checkWipe(){
       return true;
     };
     try{
-      const aRows=gRows||((await sb.guests())||[]);
-      aRows.filter(r=>r.status==='approved').forEach(finishRow);
+      (gRows||[]).filter(r=>r.status==='approved').forEach(finishRow);
     }catch(e){}
     // Client-side safety net: wipe expired card data even if the RPC was never installed.
     if(duePeople.length)for(const p of duePeople)await wipeOnePerson(p.id);
@@ -691,7 +702,7 @@ async function checkWipe(){
     if(window.updateFinishedBadge)updateFinishedBadge();
     if($('guestCompletedSection')&&$('guestCompletedSection').style.display!=='none')loadGuestHistory();
     if($('guestFinishedSection')&&$('guestFinishedSection').style.display!=='none')loadAdminFinished();
-  }catch(e){}
+  }catch(e){}finally{ window.__checkWipeRunning=false; }
 }
 
 const FW_COLORS=['#8b0028','#c41e3a','#ffd700','#ffed4e','#d4a373','#ffe0e6','#ff69b4','#ff8a3d','#2a5fd1','#9d4edd'];
@@ -4316,10 +4327,20 @@ function formatBirthdayDate(birthday){
   try{return next.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}catch(e){return next.toISOString().slice(0,10)}
 }
 function lsGetArr(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch(e){return[]}}
-function lsSetArr(key,arr,cap){try{localStorage.setItem(key,JSON.stringify((arr||[]).slice(0,cap)))}catch(e){}}
+function lsSetArr(key,arr,cap){try{localStorage.setItem(key,JSON.stringify((arr||[]).slice(0,cap)))}catch(e){}_lsCacheDel(key)}}
+/* PERF + BUGFIX: the ledger helpers below used to JSON.parse the SAME localStorage keys over and
+   over (isFinishedSlug → getFinishedPeople → full parse; checkWipe ran every 60s with dozens of
+   lookups per pass). Reads are now memoised in _LS_CACHE and the cache is invalidated on every
+   write, so values stay fresh but each key is parsed at most once per change. */
+const _LS_CACHE={};
+function _lsCacheDel(k){delete _LS_CACHE[k]}
+function lsGetArrCached(key){
+  if(!(_LS_CACHE[key]&&Array.isArray(_LS_CACHE[key])))_LS_CACHE[key]=lsGetArr(key);
+  return _LS_CACHE[key];
+}
 function getPurgedSlugs(){const m={};getPurgedList().forEach(t=>{if(t&&t.slug)m[String(t.slug).toLowerCase()]=t});return m}
-function getPurgedList(){return lsGetArr(FINISHED_PURGED_KEY)}
-function isPurged(slug){const s=String(slug||'').toLowerCase();return !!getPurgedSlugs()[s]}
+function getPurgedList(){return lsGetArrCached(FINISHED_PURGED_KEY)}
+function isPurged(slug){const s=String(slug||'').toLowerCase();return !!purgedSlugIndex()[s]}
 function rememberPurged(tomb){
   const list=getPurgedList().filter(x=>String(x.slug||'').toLowerCase()!==String(tomb.slug||'').toLowerCase());
   list.unshift(tomb);lsSetArr(FINISHED_PURGED_KEY,list,400);
@@ -4328,11 +4349,28 @@ function forgetPurged(slug){
   const s=String(slug||'').toLowerCase();
   lsSetArr(FINISHED_PURGED_KEY,getPurgedList().filter(x=>String(x.slug||'').toLowerCase()!==s),400);
 }
+// O(1) slug lookups against cached lists (was: full re-parse + linear scan per call)
+let _finIdx=null,_finIdxRef=null;
+function finishedSlugIndex(){
+  const list=lsGetArrCached(FINISHED_KEY);
+  if(_finIdx&&_finIdxRef===list)return _finIdx;
+  _finIdxRef=list;_finIdx={};
+  list.forEach(p=>{if(p&&p.slug&&!p.deleted)_finIdx[String(p.slug).toLowerCase()]=p});
+  return _finIdx;
+}
+let _purgeIdx=null,_purgeIdxRef=null;
+function purgedSlugIndex(){
+  const list=getPurgedList();
+  if(_purgeIdx&&_purgeIdxRef===list)return _purgeIdx;
+  _purgeIdxRef=list;_purgeIdx={};
+  list.forEach(t=>{if(t&&t.slug)_purgeIdx[String(t.slug).toLowerCase()]=t});
+  return _purgeIdx;
+}
 function isFinishedSlug(slug){
   const s=String(slug||'').toLowerCase();
   if(!s)return false;
   if(isPurged(s))return false; // R13/R14: purged slugs are NOT finished
-  return getFinishedPeople().some(p=>String(p.slug||'').toLowerCase()===s);
+  return !!finishedSlugIndex()[s];
 }
 function isAwaitingFinish(row){
   if(!row||row.status!=='approved')return false;
@@ -4352,7 +4390,7 @@ function findPersonBySlug(slug){
 function getFinishedPeople(){
   return lsGetArr(FINISHED_KEY).filter(p=>p&&p.slug&&!p.deleted);
 }
-function clearFinishedPeople(){try{localStorage.removeItem(FINISHED_KEY)}catch(e){}}
+function clearFinishedPeople(){try{localStorage.removeItem(FINISHED_KEY)}catch(e){}_lsCacheDel(FINISHED_KEY)}}
 // mergeTwoListsRaw: dedupe by slug; a REAL tombstone (deleted:true WITH a wiped_at timestamp) wins;
 // "ghost" tombstones (deleted:true but wiped_at=null — created when an incomplete ledger entry was
 // pushed before its data arrived) NEVER override live entries; earliest wiped_at wins; newest-first; cap 400
