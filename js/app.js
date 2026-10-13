@@ -1509,10 +1509,15 @@ function renderEvents(){
 $('voicePlayBtn').onclick=()=>{
   if(!S.CURR.voice||!S.CURR.voice.length)return;
   const a=$('audioPlayer');
-  if(a.src===S.CURR.voice[0].audio_url&&!a.paused){a.pause();return}
-  a.src=S.CURR.voice[0].audio_url||'';
+  // 🎵 FIX: compare/load the voice URL in normalized (direct) form.
+  const vurl=normalizeAudioUrl(S.CURR.voice[0].audio_url||'');
+  if(String(a.src||'')===vurl&&!a.paused){a.pause();return}
+  audioSetSrc(a,vurl);
   a.volume=parseFloat((S.CURR.shared||{}).vol_card||'0.45')||0.45;
-  a.play().catch(()=>{});
+  a.play().catch(()=>{
+    const retry=()=>{ a.play().catch(()=>{}); };
+    if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
+  });
 };
 
 let VM_CURRENT=null;
@@ -1716,14 +1721,18 @@ function enforceAreaMusicGate(){
     if(!a||a.paused||!a.src)return;
     const cur=a.currentSrc||a.src||'';
     const area=currentMusicArea();
-    const inOwn=(SS_ownPlaylist&&SS_ownPlaylist.length&&SS_ownPlaylist.includes(cur));
-    const inList=(CURR_LIST&&CURR_LIST.length&&CURR_LIST.includes(cur));
+    // 🎵 FIX (song not playing): the loaded URL is compared against the
+    // playlists AFTER normalization, so a Drive share link saved in the admin
+    // panel still counts as "allowed" instead of being paused every tick.
+    const normCur=normalizeAudioUrl(cur);
+    const inOwn=(SS_ownPlaylist&&SS_ownPlaylist.length&&(SS_ownPlaylist.includes(cur)||SS_ownPlaylist.includes(normCur)));
+    const inList=(CURR_LIST&&CURR_LIST.length&&(CURR_LIST.includes(cur)||CURR_LIST.includes(normCur)));
     if((inOwn||inList)&&area!==CURR_CTX){
       a.pause(); MUSIC_ON=false;
       const mt=$('musicToggle'); if(mt)mt.textContent='🔇'; return;
     }
     // STRICT per-area rule: the loaded URL must still be allowed in the visible area.
-    if(area && SS_isAllowedInArea(cur,area))return;
+    if(area && (SS_isAllowedInArea(cur,area)||SS_isAllowedInArea(normCur,area)))return;
     if(area && (inOwn||inList)){
       a.pause(); MUSIC_ON=false;
       const mt=$('musicToggle'); if(mt)mt.textContent='🔇';
@@ -1738,7 +1747,7 @@ function SS_isAllowedInArea(url,area){
     const s=S.CURR.shared||{};
     for(let i=1;i<=5;i++){
       if(String(s['song'+i+'_on'])!=='true')continue;
-      const u=(s['song'+i+'_url']||'').trim();
+      const u=normalizeAudioUrl(s['song'+i+'_url']||'');
       if(!u||u!==url)continue;
       if(songAllowedIn(s,i,area))return true;
     }
@@ -1808,13 +1817,46 @@ function songAllowedIn(s,i,ctx){
   if((SS_CTX_ACCEPTS[ctx]||[ctx]).indexOf(w)!==-1)return true;
   return expandWhere(w).indexOf(ctx)!==-1;
 }
+/* 🔊 AUDIO URL NORMALIZER (song-not-playing fix):
+   The admin panel asks for a direct link ("https://... .mp3"), but people very
+   often paste Google Drive *share* links instead. A browser can never play
+   those, so every song/voice URL is converted to a direct-download form here
+   before it is compared or loaded into <audio>:
+     https://drive.google.com/file/d/<ID>/view        -> uc?export=download&id=<ID>
+     https://drive.google.com/open?id=<ID>            -> uc?export=download&id=<ID>
+     https://drive.google.com/uc?id=<ID>&export=view  -> uc?export=download&id=<ID>
+     https://www.dropbox.com/s/xxx/file.mp3?dl=0      -> ...?dl=1
+   Already-direct URLs are returned untouched. */
+function normalizeAudioUrl(u){
+  try{
+    u=String(u||'').trim();
+    if(!u)return '';
+    // Google Drive: extract the file id from any link shape and rebuild a direct URL.
+    let m=u.match(/\/file\/d\/([A-Za-z0-9_-]+)/)||u.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if(m&&/drive\.google\.com|docs\.google\.com/.test(u)){
+      return 'https://drive.google.com/uc?export=download&id='+m[1];
+    }
+    // Dropbox shared links (?dl=0 previews) -> force direct download.
+    if(/dropbox\.com/.test(u)&&/[?&]dl=0/.test(u))return u.replace(/[?&]dl=0/,'?dl=1');
+    return u;
+  }catch(e){ return String(u||'').trim(); }
+}
+// Load a track into the shared <audio> element ONLY when its src actually
+// differs — re-assigning the same URL resets/pauses the element and silently
+// kills playback (this was one of the reasons "the song is not playing").
+function audioSetSrc(a,url){
+  const want=normalizeAudioUrl(url);
+  if(!want){ try{a.removeAttribute('src');a.load();}catch(e){} return false; }
+  if(String(a.src||'')!==want){ a.src=want; }
+  return true;
+}
 // FIX 5: buildPlaylistFor ignores saved order unless shuffleMusicOn==='true'
 function buildPlaylistFor(ctx){
   const s=S.CURR.shared||{};
   const base=[];
   for(let i=1;i<=5;i++){
     const on=String(s['song'+i+'_on'])==='true';
-    const url=(s['song'+i+'_url']||'').trim();
+    const url=normalizeAudioUrl(s['song'+i+'_url']||'');
     if(!on||!url)continue;
     if(songAllowedIn(s,i,ctx))base.push(url);
   }
@@ -1841,8 +1883,14 @@ function playNext(){
   if(!CURR_LIST.length)return;
   CURR_IDX=(CURR_IDX+1)%CURR_LIST.length;
   const a=$('audioPlayer');
-  a.src=CURR_LIST[CURR_IDX];a.volume=getVol(CURR_CTX);
-  a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊'}).catch(()=>{MUSIC_ON=false;$('musicToggle').textContent='🔇'});
+  audioSetSrc(a,CURR_LIST[CURR_IDX]);a.volume=getVol(CURR_CTX);
+  // v2.9b FIX (song not playing): if autoplay is blocked or the file is still
+  // loading, retry once as soon as the browser says it can play.
+  a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊'}).catch(()=>{
+    MUSIC_ON=false;$('musicToggle').textContent='🔇';
+    const retry=()=>{ a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';}).catch(()=>{MUSIC_ON=false;$('musicToggle').textContent='🔇';}); };
+    if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
+  });
 }
 // FIX 6b: hard stop used whenever music is not allowed in the current context.
 function stopMusicEverywhere(){
@@ -1903,11 +1951,23 @@ $('musicToggle').onclick=()=>{
   if(ctx==='slideshow'||ctx==='private'){CURR_CTX=ctx;CURR_LIST=list;CURR_IDX=-1;if(SS_ownPlaylist!==list){SS_ownPlaylist=list;SS_ownIdx=-1;}}
   else if(CURR_CTX!=='card'){CURR_CTX='card';CURR_LIST=buildPlaylistFor('card');CURR_IDX=-1;}
   const a=$('audioPlayer');
+  // 🎵 FIX (song not playing): when nothing is loaded yet, load the first track
+  // of this place's playlist before trying to play — previously the button did
+  // nothing at all if src was still empty.
+  const curLoaded=normalizeAudioUrl(a.currentSrc||a.src||'');
   // v2.8: if the loaded track doesn't belong to this place's playlist, load the right one first.
-  if(a.src&&CURR_LIST.length&&!CURR_LIST.includes(a.currentSrc||a.src)){a.pause();a.src=CURR_LIST[0];a.volume=getVol(CURR_CTX);MUSIC_ON=false;}
-  if(!a.src&&CURR_LIST.length){a.src=CURR_LIST[0];a.volume=getVol(CURR_CTX);}
+  if(a.src&&CURR_LIST.length&&!CURR_LIST.includes(curLoaded)){a.pause();audioSetSrc(a,CURR_LIST[0]);a.volume=getVol(CURR_CTX);MUSIC_ON=false;CURR_IDX=0;if(SS_ownPlaylist===CURR_LIST)SS_ownIdx=0;}
+  if(!a.src&&CURR_LIST.length){audioSetSrc(a,CURR_LIST[0]);a.volume=getVol(CURR_CTX);CURR_IDX=0;if(SS_ownPlaylist===CURR_LIST)SS_ownIdx=0;}
   if(MUSIC_ON&&!a.paused){a.pause();MUSIC_ON=false;$('musicToggle').textContent='🔇'}
-  else{MUSIC_ON=true;a.play().catch(()=>{});$('musicToggle').textContent='🔊'}
+  else{
+    MUSIC_ON=true;
+    $('musicToggle').classList.add('visible');
+    a.play().then(()=>{$('musicToggle').textContent='🔊'}).catch(()=>{
+      // Autoplay/latency fallback: retry once as soon as the browser can play.
+      const retry=()=>{ a.play().then(()=>{$('musicToggle').textContent='🔊';}).catch(()=>{$('musicToggle').textContent='🔇';MUSIC_ON=false;}); };
+      if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
+    });
+  }
 };
 
 $('langToggle').onclick=()=>{
@@ -2158,12 +2218,14 @@ function SS_ensureMusicPlaying(){
     return;
   }
   const curSrc=a.currentSrc||a.src||'';
-  if(!a.paused && curSrc && !wantList.includes(curSrc)){
+  const normCur=normalizeAudioUrl(curSrc);
+  const inWantList=(wantList.includes(curSrc)||wantList.includes(normCur));
+  if(!a.paused && curSrc && !inWantList){
     // A track from another place (e.g. card-only song) is playing inside the
     // slideshow -> stop it and load the correct slideshow playlist instead.
     a.pause();
   }
-  if(a.paused || !a.src || !wantList.includes(a.currentSrc||a.src||'')){
+  if(a.paused || !a.src || !inWantList){
     SS_ownPlaylist=wantList;
     SS_ownIdx=0;
     a.loop=false;
@@ -2184,8 +2246,8 @@ function SS_ensureMusicPlaying(){
     };
     // v2.8b: only RE-assign src when it actually differs — re-assigning the same
     // URL would reset/pause the element and silently kill playback.
-    if(a.src!==wantList[0]){ a.src=wantList[0]; }
-    startPlay();
+    // 🎵 FIX: audioSetSrc also normalizes Drive share links to direct URLs.
+    if(audioSetSrc(a,wantList[0])) startPlay();
     return;
   }
   if(ssList.length && SS_musicDucked!==true){
@@ -2203,7 +2265,7 @@ function SS_nextTrackIfOwn(){
   }
   if(!SS_ownPlaylist || !SS_ownPlaylist.length)return;
   SS_ownIdx=(SS_ownIdx+1)%SS_ownPlaylist.length;
-  a.src=SS_ownPlaylist[SS_ownIdx];
+  audioSetSrc(a,SS_ownPlaylist[SS_ownIdx]);
   a.volume=getVol(SS_musicCtx());
   a.play().catch(()=>{});
 }
@@ -2554,14 +2616,16 @@ function SS_updateSlide(){
     const a=$('audioPlayer');
     let mctx=SS_musicCtxSafe(); // 'slideshow' or 'private' — exactly what is open
     let ssList=buildPlaylistFor(mctx);
+    // 🎵 FIX: compare the loaded src in normalized form too (Drive links).
+    const curSrcN=normalizeAudioUrl(a.currentSrc||a.src||'');
     if(!ssList.length){
       // Nothing is allowed to play in this context -> stay silent.
       if(!a.paused){ a.pause(); MUSIC_ON=false; $('musicToggle').textContent='🔇'; }
     } else if(a.paused || !a.src){
       // Only resume in-place if the currently loaded track belongs to the slideshow playlist.
       const curSrc=a.currentSrc||a.src||'';
-      const isOwn=(SS_ownPlaylist.length&&SS_ownPlaylist.includes(curSrc));
-      if((CURR_LIST.length && (CURR_CTX==='slideshow'||CURR_CTX==='private') && ssList.includes(curSrc)) || isOwn){
+      const isOwn=(SS_ownPlaylist.length&&(SS_ownPlaylist.includes(curSrc)||SS_ownPlaylist.includes(curSrcN)));
+      if((CURR_LIST.length && (CURR_CTX==='slideshow'||CURR_CTX==='private') && (ssList.includes(curSrc)||ssList.includes(curSrcN))) || isOwn){
         a.volume=getVol(mctx);
         a.play().catch(()=>{});
         MUSIC_ON=true;
@@ -2576,7 +2640,7 @@ function SS_updateSlide(){
       // verify the loaded track really belongs to THIS area's slideshow/private
       // playlist; otherwise swap/pause so card-only songs can never be heard here.
       const curSrc=a.currentSrc||a.src||'';
-      if(!ssList.includes(curSrc)){
+      if(!(ssList.includes(curSrc)||ssList.includes(curSrcN))){
         SS_ensureMusicPlaying();
       } else {
         a.volume=getVol(mctx);
@@ -2708,8 +2772,9 @@ document.addEventListener('visibilitychange',()=>{ enforceAreaMusicGate();
     const mctx=SS_musicCtxSafe(); // 'slideshow' or 'private' — exactly what is open
     if(a&&a.src&&musicAllowedInCtx(mctx)){
       const curSrc=a.currentSrc||a.src||'';
+      const curSrcN=normalizeAudioUrl(curSrc);
       let ssList=buildPlaylistFor(mctx);
-      if(ssList.includes(curSrc)){ a.volume=getVol(mctx); a.play().catch(()=>{}); }
+      if(ssList.includes(curSrc)||ssList.includes(curSrcN)){ a.volume=getVol(mctx); a.play().catch(()=>{}); }
       else { SS_ensureMusicPlaying(); }
     }
     else if(a&&!a.paused){ a.pause(); MUSIC_ON=false; const mt=$('musicToggle'); if(mt)mt.textContent='🔇'; }
