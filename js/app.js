@@ -93,6 +93,17 @@ function bumpOverlayZ(el){
 }
 function show(el){ if(el){ bumpOverlayZ(el); el.classList.add('active'); } }
 function hide(el){ if(el){ el.classList.remove('active','is-topmost'); el.style.zIndex=''; } }
+// True only when the element is actually painted on screen (used by the music
+// area gate). Defensive: any measurement failure counts as "not visible".
+function isElVisibleOnScreen(el){
+  try{
+    if(!el)return false;
+    const cs=getComputedStyle(el);
+    if(cs.display==='none'||cs.visibility==='hidden'||parseFloat(cs.opacity||'1')===0)return false;
+    const r=el.getBoundingClientRect();
+    return !!(r.width>0&&r.height>0);
+  }catch(e){ return false; }
+}
 
 /* ── In-page alert / confirm / prompt ──────────────────────────────────────
    window.alert()/confirm() can be rendered by the browser *behind* a
@@ -1540,30 +1551,90 @@ $('voicePlayBtn').onclick=()=>{
 };
 
 let VM_CURRENT=null;
+/* 🎬 VIDEO URL NORMALIZER (fix: "video message not appearing while playing"):
+   Guests usually paste Google Drive *share* links (".../file/d/<ID>/view") or
+   YouTube links into the Video URL field. A <video> element can never play
+   those — it fires an error and the old code silently closed the modal after
+   600 ms, so the video message "disappeared" on the card. Every shape is now
+   converted to something embeddable:
+     drive share/view/uc link   -> https://drive.google.com/file/d/<ID>/preview (iframe)
+     youtube watch/youtu.be/shorts/embed -> https://www.youtube.com/embed/<ID> (iframe)
+     other direct http(s) links -> untouched (native <video>) */
+function normalizeVideoEmbed(u){
+  const s=String(u||'').trim();
+  if(!s)return '';
+  let m=s.match(/\/file\/d\/([A-Za-z0-9_-]+)/)||s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+  if(m&&/drive\.google\.com|docs\.google\.com/.test(s))return 'https://drive.google.com/file/d/'+m[1]+'/preview';
+  m=s.match(/(?:youtube\.com\/watch\?[^\s]*v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/);
+  if(m)return 'https://www.youtube.com/embed/'+m[1];
+  return s;
+}
+function isIframeVideoUrl(u){ return /drive\.google\.com|docs\.google\.com|youtube\.com|youtu\.be/.test(String(u||'')); }
 $('videoMsgBtn').onclick=()=>{
   if(!S.CURR.video||!S.CURR.video.length)return;
   if(VM_CURRENT){ try{const v=VM_CURRENT.querySelector('video'); if(v){v.pause();v.currentTime=0;v.src='';}}catch(e){} VM_CURRENT.remove(); VM_CURRENT=null; }
+  // FIX: show ALL submitted video messages (the guest panel allows many rows),
+  // previously only videos[0] was ever reachable — the rest "didn't come" on the card.
+  const vids=(S.CURR.video||[]).filter(v=>v&&(v.video_url||v.url));
+  if(!vids.length)return;
+  const mediaHtmlFor=(raw)=>{
+    const e2=normalizeVideoEmbed(raw);
+    return isIframeVideoUrl(e2)
+      ? '<iframe src="'+e2+'" class="vm-video" style="width:100%;aspect-ratio:16/9;border:0;border-radius:1rem;background:#000;" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>'
+      : '<video src="'+e2+'" controls playsinline autoplay class="vm-video"></video>';
+  };
+  const pickerHtml=vids.length>1
+    ? '<div class="vm-picker" style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem;justify-content:center;">'+
+      vids.map((v,i)=>'<button type="button" class="panel-btn vm-pick" data-vm-i="'+i+'" style="'+(i===0?'outline:2px solid #fff;':'')+'">🎬 '+String(v.title||('Video '+(i+1))).replace(/</g,'&lt;')+'</button>').join('')+
+      '</div>' : '';
   const m=document.createElement('div');
   m.className='info-modal active';
   m.innerHTML=`<div class="info-content vm-modal-content">
     <button class="info-close" id="vmClose">✕</button>
-    <div class="info-title">${(S.CURR.video[0].title||'A message').replace(/</g,'&lt;')}</div>
-    <video src="${S.CURR.video[0].video_url}" controls playsinline autoplay class="vm-video"></video>
+    <div class="info-title">${(vids[0].title||'A message').replace(/</g,'&lt;')}</div>
+    <div class="vm-media">${mediaHtmlFor(vids[0].video_url||vids[0].url||'')}</div>
+    ${pickerHtml}
+    <div class="vm-status panel-status" style="display:none;margin-top:.5rem;"></div>
+    <a class="panel-btn vm-fallback" target="_blank" rel="noopener noreferrer" style="display:none;margin-top:.4rem;">🔗 Open original link</a>
   </div>`;
   document.body.appendChild(m);
   VM_CURRENT=m;
-  const vid=m.querySelector('video');
+  const statusEl=m.querySelector('.vm-status');
+  const fallbackEl=m.querySelector('.vm-fallback');
+  function bindVid(idx){
+    const v=vids[idx];if(!v)return;
+    const raw=v.video_url||v.url||'';
+    const vv=m.querySelector('video');
+    if(vv){
+      // FIX: load errors no longer auto-close the modal (that made the video
+      // message vanish). We keep it open, explain, and offer the raw link.
+      vv.addEventListener('error', ()=>{
+        statusEl.textContent='⚠️ This video could not be played directly. Open the original link below, or ask the admin to use a direct file link.';
+        statusEl.style.display='block';
+        if(raw){ fallbackEl.href=raw; fallbackEl.style.display='inline-block'; }
+      });
+      const p=vv.play();
+      if(p&&p.catch)p.catch(()=>{ vv.muted=true; vv.play().catch(()=>{}); });
+    } else { statusEl.style.display='none'; }
+  }
+  const swapTo=(idx)=>{
+    const v=vids[idx];if(!v)return;
+    m.querySelector('.info-title').textContent=v.title||'A message';
+    m.querySelector('.vm-media').innerHTML=mediaHtmlFor(v.video_url||v.url||'');
+    statusEl.style.display='none'; fallbackEl.style.display='none';
+    m.querySelectorAll('.vm-pick').forEach(b=>b.style.outline=(+b.dataset.vmI===idx)?'2px solid #fff':'');
+    bindVid(idx);
+  };
   const closeVM=()=>{
-    try{ vid.pause(); vid.currentTime=0; vid.removeAttribute('src'); vid.load(); }catch(e){}
+    const vv=m.querySelector('video');
+    if(vv){ try{ vv.pause(); vv.currentTime=0; vv.removeAttribute('src'); vv.load(); }catch(e){} }
     m.remove();
     if(VM_CURRENT===m)VM_CURRENT=null;
   };
-  vid.addEventListener('ended', closeVM);
-  vid.addEventListener('error', ()=>{ setTimeout(closeVM,600); });
+  m.querySelectorAll('.vm-pick').forEach(b=>{ b.onclick=()=>swapTo(+b.dataset.vmI); });
   m.querySelector('#vmClose').onclick=closeVM;
   m.addEventListener('click',(e)=>{ if(e.target===m)closeVM(); });
-  const p=vid.play();
-  if(p&&p.catch)p.catch(()=>{ vid.muted=true; vid.play().catch(()=>{}); });
+  bindVid(0);
 };
 
 let STORY_IDX=0;
