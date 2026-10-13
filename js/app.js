@@ -1714,6 +1714,27 @@ let MUSIC_ON=false,CURR_CTX='card',CURR_LIST=[],CURR_IDX=-1;
    resolves the single visible area; every play/resume path checks it first. */
 function isHomeVisible(){ const h=$('homeScreen'); return !!h && !h.classList.contains('hidden'); }
 function isCardVisible(){ const v=$('viewerScreen'); return !!v && v.classList.contains('active') && !isHomeVisible(); }
+/* 🎵 THE "SONG IS NOT GETTING PLAYED" ROOT-CAUSE FIX (v2.9c)
+   The area gate used to ask: "which overlay is topmost?" — and treated ANY
+   other active overlay as "no music area is open". But the app opens MANY
+   small modals ON TOP of the card/slideshow (📖 Our Story, 🗺️ Map, map-pin
+   popup, 📤 Upload, 💝 Gifts, video messages, review/closing popups, OTP box,
+   dynamically created .info-modals). With one of those open the gate resolved
+   to '' and the 700 ms watchdog PAUSED the song within a second — autoplay
+   was killed, the 🔇 icon stayed grey, and tapping play again was paused
+   right away. That is why the song never played.
+   RULE NOW: an active overlay masks the music area ONLY if there is NO real
+   music screen underneath it (#viewerScreen or #slideshowOverlay active).
+   Modals sitting on top of an open area keep that area's music playing. */
+function musicScreenUnderneathActive(){
+  try{
+    const v=$('viewerScreen');
+    if(v&&v.classList.contains('active'))return true;
+    const s=$('slideshowOverlay');
+    if(s&&s.classList.contains('active'))return true;
+  }catch(e){}
+  return false;
+}
 function currentMusicArea(){
   if(document.hidden)return '';
   // 🎵 FIX (music not playing in card & slideshows): only honour overlays that
@@ -1721,8 +1742,18 @@ function currentMusicArea(){
   // 'is-topmost'. Dynamically-created modals (gift/video/info) get 'active'
   // without the topmost marker, so they can no longer mask the card and make
   // the area resolve to '' (which silenced music in every area).
-  try{ const top=document.querySelector(OVERLAY_SEL+'.active.is-topmost');
-    if(top){ return (top.id==='slideshowOverlay')?((SS_CTX==='private')?'private':'slideshow'):''; }
+  try{
+    const top=document.querySelector(OVERLAY_SEL+'.active.is-topmost');
+    if(top){
+      if(top.id==='slideshowOverlay')return (SS_CTX==='private')?'private':'slideshow';
+      // A modal on top of the card / an open slideshow does NOT close that area.
+      if(musicScreenUnderneathActive()){
+        if(SS_isOpen||($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active')))
+          return (SS_CTX==='private')?'private':'slideshow';
+        return 'card';
+      }
+      return ''; // home / opening / lock / admin panel / standalone modal -> silence
+    }
   }catch(e){}
   // Slideshow overlay open but marker lost -> derive the area from the element itself.
   if(SS_isOpen||($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active'))){
