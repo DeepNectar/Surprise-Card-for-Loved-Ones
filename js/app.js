@@ -1721,8 +1721,21 @@ function currentMusicArea(){
   // 'is-topmost'. Dynamically-created modals (gift/video/info) get 'active'
   // without the topmost marker, so they can no longer mask the card and make
   // the area resolve to '' (which silenced music in every area).
-  try{ const top=document.querySelector(OVERLAY_SEL+'.active.is-topmost');
-    if(top){ return (top.id==='slideshowOverlay')?((SS_CTX==='private')?'private':'slideshow'):''; }
+  // 🎵 FIX v2: a *hidden* overlay can never mask anything. bumpOverlayZ() only
+  // adds 'is-topmost', it never removes 'active'; some legacy paths hide
+  // elements with .classList.remove('active')/add('hidden') instead of hide(),
+  // which left a stale 'is-topmost' marker on an invisible modal. That stale
+  // marker made the area resolve to '' forever, so the watchdog paused every
+  // song the instant it started ("the song is not getting played"). Now we walk
+  // the topmost markers newest-first and only accept one that is actually
+  // visible on screen.
+  try{ const tops=document.querySelectorAll(OVERLAY_SEL+'.active.is-topmost');
+    for(let k=tops.length-1;k>=0;k--){
+      const top=tops[k];
+      if(!top.classList.contains('active'))continue;
+      if(!isElVisibleOnScreen(top))continue;
+      return (top.id==='slideshowOverlay')?((SS_CTX==='private')?'private':'slideshow'):'';
+    }
   }catch(e){}
   // Slideshow overlay open but marker lost -> derive the area from the element itself.
   if(SS_isOpen||($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active'))){
