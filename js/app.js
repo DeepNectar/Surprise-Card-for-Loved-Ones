@@ -1514,8 +1514,8 @@ $('voicePlayBtn').onclick=()=>{
   if(String(a.src||'')===vurl&&!a.paused){a.pause();return}
   audioSetSrc(a,vurl);
   a.volume=parseFloat((S.CURR.shared||{}).vol_card||'0.45')||0.45;
-  a.play().catch(()=>{
-    const retry=()=>{ a.play().catch(()=>{}); };
+  markPlayAttempt();a.play().catch(()=>{
+    const retry=()=>{ markPlayAttempt();a.play().catch(()=>{}); };
     if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
   });
 };
@@ -1697,11 +1697,16 @@ function isHomeVisible(){ const h=$('homeScreen'); return !!h && !h.classList.co
 function isCardVisible(){ const v=$('viewerScreen'); return !!v && v.classList.contains('active') && !isHomeVisible(); }
 function currentMusicArea(){
   if(document.hidden)return '';
-  // v2.9: whichever overlay was shown LAST is the area on top of the card.
+  // 🎵 FIX (music not playing in card & slideshows): only honour overlays that
+  // went through show()/bumpOverlayZ() — those carry BOTH 'active' AND
+  // 'is-topmost'. Dynamically-created modals (gift/video/info) get 'active'
+  // without the topmost marker, so they can no longer mask the card and make
+  // the area resolve to '' (which silenced music in every area).
   try{ const top=document.querySelector(OVERLAY_SEL+'.active.is-topmost');
-    if(top){ return (top.id==='slideshowOverlay'&&SS_isOpen)?((SS_CTX==='private')?'private':'slideshow'):''; }
+    if(top){ return (top.id==='slideshowOverlay')?((SS_CTX==='private')?'private':'slideshow'):''; }
   }catch(e){}
-  if(SS_isOpen){
+  // Slideshow overlay open but marker lost -> derive the area from the element itself.
+  if(SS_isOpen||($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active'))){
     if(!($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active')))return '';
     return (SS_CTX==='private')?'private':'slideshow';
   }
@@ -1715,10 +1720,17 @@ function areaGateOk(ctx){ const a=currentMusicArea(); return !!a && a===ctx; }
 // slideshow closed, back-to-home, tab switched). Safe to call often.
 // HD1.5: also re-checks the per-song 'where' selection — a song may only keep
 // playing while its OWN selected area is the one currently on screen.
+// 🎵 FIX: tracks the timestamp of the last play ATTEMPT so the 700 ms watchdog
+// below gets a short grace window — previously it could pause a valid track
+// within a second of it starting (open/close races on card & slideshows).
+let _lastPlayAt=0;
+function markPlayAttempt(){ _lastPlayAt=Date.now(); }
 function enforceAreaMusicGate(){
   try{
     const a=$('audioPlayer');
     if(!a||a.paused||!a.src)return;
+    // Grace window: never fight a play() that was just requested.
+    if(Date.now()-_lastPlayAt<1500)return;
     const cur=a.currentSrc||a.src||'';
     const area=currentMusicArea();
     // 🎵 FIX (song not playing): the loaded URL is compared against the
@@ -1834,7 +1846,10 @@ function normalizeAudioUrl(u){
     // Google Drive: extract the file id from any link shape and rebuild a direct URL.
     let m=u.match(/\/file\/d\/([A-Za-z0-9_-]+)/)||u.match(/[?&]id=([A-Za-z0-9_-]+)/);
     if(m&&/drive\.google\.com|docs\.google\.com/.test(u)){
-      return 'https://drive.google.com/uc?export=download&id='+m[1];
+      // 🎵 FIX: drive.google.com/uc now often answers with an HTML virus-scan
+      // confirmation page instead of the file, which <audio> cannot play.
+      // drive.usercontent.google.com/download?...&confirm=t always streams the raw file.
+      return 'https://drive.usercontent.google.com/download?id='+m[1]+'&export=download&confirm=t';
     }
     // Dropbox shared links (?dl=0 previews) -> force direct download.
     if(/dropbox\.com/.test(u)&&/[?&]dl=0/.test(u))return u.replace(/[?&]dl=0/,'?dl=1');
@@ -1886,9 +1901,9 @@ function playNext(){
   audioSetSrc(a,CURR_LIST[CURR_IDX]);a.volume=getVol(CURR_CTX);
   // v2.9b FIX (song not playing): if autoplay is blocked or the file is still
   // loading, retry once as soon as the browser says it can play.
-  a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊'}).catch(()=>{
+  markPlayAttempt();a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊'}).catch(()=>{
     MUSIC_ON=false;$('musicToggle').textContent='🔇';
-    const retry=()=>{ a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';}).catch(()=>{MUSIC_ON=false;$('musicToggle').textContent='🔇';}); };
+    const retry=()=>{ markPlayAttempt();a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';}).catch(()=>{MUSIC_ON=false;$('musicToggle').textContent='🔇';}); };
     if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
   });
 }
@@ -1962,9 +1977,9 @@ $('musicToggle').onclick=()=>{
   else{
     MUSIC_ON=true;
     $('musicToggle').classList.add('visible');
-    a.play().then(()=>{$('musicToggle').textContent='🔊'}).catch(()=>{
+    markPlayAttempt();a.play().then(()=>{$('musicToggle').textContent='🔊'}).catch(()=>{
       // Autoplay/latency fallback: retry once as soon as the browser can play.
-      const retry=()=>{ a.play().then(()=>{$('musicToggle').textContent='🔊';}).catch(()=>{$('musicToggle').textContent='🔇';MUSIC_ON=false;}); };
+      const retry=()=>{ markPlayAttempt();a.play().then(()=>{$('musicToggle').textContent='🔊';}).catch(()=>{$('musicToggle').textContent='🔇';MUSIC_ON=false;}); };
       if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); try{a.load();}catch(e){} } else retry();
     });
   }
@@ -2169,7 +2184,7 @@ function SS_playVideo(v,unmuteBtn){
 function SS_fadeMusic(target,duration){
   const a=$('audioPlayer');if(!a)return;
   if(a.paused && target>0 && a.src){
-    a.play().catch(()=>{});
+    markPlayAttempt();a.play().catch(()=>{});
   }
   const start=a.volume;
   if(Math.abs(start-target)<0.01){a.volume=target;return;}
@@ -2232,13 +2247,13 @@ function SS_ensureMusicPlaying(){
     a.volume=getVol(mctx);
     CURR_CTX=mctx;CURR_LIST=wantList;CURR_IDX=0;
     const startPlay=()=>{
-      a.play().then(()=>{
+      markPlayAttempt();a.play().then(()=>{
         MUSIC_ON=true;
         $('musicToggle').textContent='🔊';
         $('musicToggle').classList.add('visible');
       }).catch(()=>{
         // v2.8b: autoplay can be blocked until the src is fully loaded — retry once on 'canplay'.
-        const retry=()=>{ a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';$('musicToggle').classList.add('visible');}).catch(()=>{MUSIC_ON=false;}); };
+        const retry=()=>{ markPlayAttempt();a.play().then(()=>{MUSIC_ON=true;$('musicToggle').textContent='🔊';$('musicToggle').classList.add('visible');}).catch(()=>{MUSIC_ON=false;}); };
         if(a.readyState<3){ a.addEventListener('canplay',retry,{once:true}); a.load(); }
         else retry();
         MUSIC_ON=false;
@@ -2267,7 +2282,7 @@ function SS_nextTrackIfOwn(){
   SS_ownIdx=(SS_ownIdx+1)%SS_ownPlaylist.length;
   audioSetSrc(a,SS_ownPlaylist[SS_ownIdx]);
   a.volume=getVol(SS_musicCtx());
-  a.play().catch(()=>{});
+  markPlayAttempt();a.play().catch(()=>{});
 }
 
 // FIX 5: only apply saved order when shuffleMediaOn==='true' (private slideshow uses privateMediaOrder)
@@ -2435,8 +2450,10 @@ async function SS_openFromRows(rows,ctx){
   SS_IDX=0;
   SS_saveSession();
   SS_buildSlides();
-  show($('slideshowOverlay'));
+  // FLAG FIX: flip the flag BEFORE show() so the watchdog never sees an
+  // inconsistent state (overlay active but SS_isOpen false) and pauses music.
   SS_isOpen=true;
+  show($('slideshowOverlay'));
   SS_musicDucked=false;
   try{ sessionStorage.setItem('active_slideshow_open','1'); }catch(e){}
   SS_ensureMusicPlaying();
@@ -2627,7 +2644,7 @@ function SS_updateSlide(){
       const isOwn=(SS_ownPlaylist.length&&(SS_ownPlaylist.includes(curSrc)||SS_ownPlaylist.includes(curSrcN)));
       if((CURR_LIST.length && (CURR_CTX==='slideshow'||CURR_CTX==='private') && (ssList.includes(curSrc)||ssList.includes(curSrcN))) || isOwn){
         a.volume=getVol(mctx);
-        a.play().catch(()=>{});
+        markPlayAttempt();a.play().catch(()=>{});
         MUSIC_ON=true;
         $('musicToggle').textContent='🔊';
         $('musicToggle').classList.add('visible');
@@ -2699,9 +2716,11 @@ function SS_prev(){
   SS_updateSlide();
 }
 function SS_close(){
+  // FLAG FIX: hide the overlay FIRST, then clear the flag - the old order let
+  // the watchdog pause freshly-started slideshow music during the race window.
+  hide($('slideshowOverlay'));
   SS_isOpen=false;
   try{ sessionStorage.removeItem('active_slideshow_open'); }catch(e){}
-  hide($('slideshowOverlay'));
   SS_clearTimers();
   SS_stopFloaters();
   const t=$('slidesTrack');
@@ -2774,7 +2793,7 @@ document.addEventListener('visibilitychange',()=>{ enforceAreaMusicGate();
       const curSrc=a.currentSrc||a.src||'';
       const curSrcN=normalizeAudioUrl(curSrc);
       let ssList=buildPlaylistFor(mctx);
-      if(ssList.includes(curSrc)||ssList.includes(curSrcN)){ a.volume=getVol(mctx); a.play().catch(()=>{}); }
+      if(ssList.includes(curSrc)||ssList.includes(curSrcN)){ a.volume=getVol(mctx); markPlayAttempt();a.play().catch(()=>{}); }
       else { SS_ensureMusicPlaying(); }
     }
     else if(a&&!a.paused){ a.pause(); MUSIC_ON=false; const mt=$('musicToggle'); if(mt)mt.textContent='🔇'; }

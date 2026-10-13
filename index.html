@@ -1158,7 +1158,10 @@
 
 <div class="toast" id="globalToast"></div>
 
-<audio id="audioPlayer" preload="auto" crossorigin="anonymous"></audio>
+<!-- 🎵 FIX (music not playing in card/slideshow): crossorigin="anonymous" made the
+     browser abort fetching Google Drive / Dropbox audio (they send no CORS headers),
+     so play() always rejected. The audio element needs no CORS here. -->
+<audio id="audioPlayer" preload="auto"></audio>
 <button class="music-toggle" id="musicToggle" aria-label="Toggle music">🔊</button>
 <button class="lang-toggle" id="langToggle" aria-label="Change language" data-state="en">EN</button>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
