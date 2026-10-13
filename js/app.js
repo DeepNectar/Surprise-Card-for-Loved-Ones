@@ -1242,6 +1242,14 @@ function openOpeningFull(){
   $('openingScreen').classList.remove('hidden');show($('openingScreen'));
 }
 $('cakeClickable').onclick=async()=>{
+  // 🎵 CAKE-CLICK MUSIC FIX: the cake tap IS a real user gesture, so this is
+  // the one moment the browser will reliably let audio start. Unlock the shared
+  // <audio> element synchronously right here, and mark that the user wants the
+  // card music — previously the first play() attempt happened only AFTER an
+  // async data load inside showViewerFor(), by which time some mobile browsers
+  // no longer treated it as gesture-initiated and silently blocked playback.
+  primeAudioUnlock();
+  _musicResumeAfterPause=true;
   $('openingScreen').classList.add('hidden');
   setTimeout(()=>hide($('openingScreen')),800);
   if(!S.CURRENT_PERSON)return;
@@ -1249,11 +1257,16 @@ $('cakeClickable').onclick=async()=>{
 };
 
 async function showViewerFor(person,startNow){
+  // 🎵 CAKE-CLICK MUSIC FIX: mark the card viewer active BEFORE the async data
+  // load so currentMusicArea() already resolves to 'card' while the person's
+  // settings/media are being fetched. Without this, every music start attempted
+  // inside the click handler was rejected by the area gate (the home screen is
+  // still technically visible during the await below).
+  $('homeScreen').classList.add('hidden');
+  show($('viewerScreen'));
   if(!S.CURRENT_PERSON||S.CURRENT_PERSON.id!==person.id){
     await loadPersonIntoState(person);
   }
-  $('homeScreen').classList.add('hidden');
-  show($('viewerScreen'));
   $('viewerPreviewTag').style.display=S.PREVIEW_MODE?'inline-block':'none';
   $('viewerEditCardBtn').classList.toggle('visible',!!S.REQUESTER_MODE&&!S.PREVIEW_MODE);
   $('musicToggle').classList.toggle('visible',buildPlaylistFor('card').length>0);
@@ -1264,7 +1277,13 @@ async function showViewerFor(person,startNow){
   if(startNow)startCard();
   // v2.9 AREA GATE: the card is now appearing on screen — start ONLY the songs
   // selected for 'Card'/'Both'. If none are selected, make sure nothing plays.
-  if(musicAllowedInCtx('card')) startMusicFor('card');
+  // 🎵 RESUME GUARD: if the user had already started music before going Home and
+  // re-opening via the cake, force a fresh start even though the shared audio
+  // element was paused in the meantime. Otherwise let startCard()/startMusicFor
+  // handle it — but NEVER pause here when a card song is selected and simply
+  // still loading (pausing mid-load was another reason "the song never plays").
+  if(noteAreaOpenWant('card')){ /* resumed via guard */ }
+  else if(musicAllowedInCtx('card')) startMusicFor('card');
   else { const a=$('audioPlayer'); if(a&&!a.paused)a.pause(); MUSIC_ON=false; }
   window.scrollTo(0,0);
 }
@@ -1710,11 +1729,91 @@ function currentMusicArea(){
     if(!($('slideshowOverlay')&&$('slideshowOverlay').classList.contains('active')))return '';
     return (SS_CTX==='private')?'private':'slideshow';
   }
-  if(isCardVisible())return 'card';
+  // 🎵 FIX (music starting the moment the cake is tapped): showViewerFor() now
+  // marks #viewerScreen 'active' IMMEDIATELY when the cake is clicked, instead
+  // of waiting for the person's data to finish loading. During that async gap
+  // the old check (home still visible) wrongly returned '' and every music
+  // start was blocked. The card itself is hidden (opacity 0) until renderCardFull
+  // completes, so treating an active viewer with the home screen still fading
+  // out as 'card' is safe — it is always mid-transition INTO the card.
+  if($('viewerScreen')&&$('viewerScreen').classList.contains('active'))return 'card';
   return ''; // home / opening / lock / modals only -> no music area is open
+}
+// True while a background-music track (card / slideshow / private playlist) is
+// actually audible right now. Video-message audio does NOT count: its own
+// <video> element plays independently of the shared #audioPlayer.
+function isBgMusicAudible(){
+  try{
+    const a=$('audioPlayer');
+    if(!a||a.paused)return false;
+    if(MUSIC_ON)return true;
+    // Defensive: some paths call play() without flipping MUSIC_ON — if the
+    // loaded track belongs to one of our playlists it counts as playing.
+    const cur=a.currentSrc||a.src||'';
+    if(!cur)return false;
+    const normCur=normalizeAudioUrl(cur);
+    const inOwn=(SS_ownPlaylist&&SS_ownPlaylist.length&&(SS_ownPlaylist.includes(cur)||SS_ownPlaylist.includes(normCur)));
+    const inList=(CURR_LIST&&CURR_LIST.length&&(CURR_LIST.includes(cur)||CURR_LIST.includes(normCur)));
+    return !!(inOwn||inList);
+  }catch(e){ return false; }
+}
+/* 🎵 CAKE-REVEAL RESUME GUARD:
+   If the user already started the card music earlier (tapped the cake once),
+   navigated Home, and taps the cake AGAIN, the browser may have paused the
+   shared <audio> element in the meantime. Remember that state here so the next
+   cake tap (or any later area-open event) resumes the music automatically
+   instead of staying silent. */
+let _musicResumeAfterPause=false;
+function noteAreaOpenWant(ctx){
+  if(_musicResumeAfterPause && !isBgMusicAudible()){
+    _musicResumeAfterPause=false;
+    startMusicFor(ctx);
+    return true;
+  }
+  return false;
+}
+// Called from the area-gate watchdog: remembers whether music was audible the
+// last time an area was on screen, so a browser-initiated pause can be undone
+// on the next area opening (cake tap / slideshow open).
+function updateMusicResumeState(){
+  try{
+    const area=currentMusicArea();
+    if(area){
+      // Only remember "user wants music" while it is genuinely audible. Once an
+      // area is open and the track has started, later browser-initiated pauses
+      // (tab sleep, OS interruptions) must NOT trigger a surprise resume — the
+      // 🔇 toggle button stays in control from then on.
+      if(isBgMusicAudible() && CURR_LIST.length && MUSIC_ON)_musicResumeAfterPause=false;
+    } else {
+      const a=$('audioPlayer');
+      if(_musicResumeAfterPause && a && !a.paused && a.currentTime>0){
+        _musicResumeAfterPause=false; // we ourselves stopped/paused it deliberately
+      }
+    }
+  }catch(e){}
 }
 // True when the given playlist context is the area currently on screen.
 function areaGateOk(ctx){ const a=currentMusicArea(); return !!a && a===ctx; }
+/* 🎵 GESTURE UNLOCK (cake click / Open Memories / Open Private Memories):
+   Mobile browsers only allow <audio> playback when play() is called directly
+   inside a user-gesture handler — an await BEFORE the first play() loses that
+   privilege. Every area-open button therefore calls this synchronously as its
+   very first action: it primes the shared #audioPlayer with a muted 1-frame
+   play/pause so every later programmatic play() (after data loads) succeeds. */
+function primeAudioUnlock(){
+  try{
+    const ca=$('audioPlayer');
+    if(!ca)return;
+    // Never disturb a track that is already audible.
+    if(!ca.paused)return;
+    ca.muted=true;
+    const up=ca.play();
+    if(up&&up.then){
+      up.then(()=>{ try{ca.pause();ca.currentTime=0;}catch(e){} ca.muted=false; })
+        .catch(()=>{ ca.muted=false; });
+    } else ca.muted=false;
+  }catch(e){}
+}
 // Pause the shared audio element whenever the loaded track belongs to an area
 // that is no longer open/visible (e.g. card hidden behind the slideshow,
 // slideshow closed, back-to-home, tab switched). Safe to call often.
@@ -1726,6 +1825,9 @@ function areaGateOk(ctx){ const a=currentMusicArea(); return !!a && a===ctx; }
 let _lastPlayAt=0;
 function markPlayAttempt(){ _lastPlayAt=Date.now(); }
 function enforceAreaMusicGate(){
+  // 🎵 Keep the cake-reveal resume guard up to date on every watchdog tick
+  // (records whether music was audible while an area was on screen).
+  updateMusicResumeState();
   try{
     const a=$('audioPlayer');
     if(!a||a.paused||!a.src)return;
@@ -2444,6 +2546,13 @@ async function SS_openFromRows(rows,ctx){
   const src=ctx==='private'?sp.priv:sp.pub;
   const filtered=(src||[]).filter(r=>(r.type==='video'&&r.src)||(r.type==='photo'&&(r.drive_id||r.src)));
   if(!filtered.length){await alert(ctx==='private'?'No private memories yet 🔒':'No memories yet 💕');return}
+  // 🎵 SLIDESHOW MUSIC FIX (regular AND private): remember that the user just
+  // tapped "Open Memories"/"Open Private Memories" — a real user gesture. If the
+  // shared <audio> element gets paused externally during the async media load
+  // below (mobile autoplay policies), the resume guard will force the correct
+  // area's playlist ('slideshow' or 'private') to start in the same tick the
+  // overlay appears.
+  _musicResumeAfterPause=true;
   const ordered=SS_applySavedMediaOrder(filtered,ctx);
   SS_CTX=ctx;
   SS=SS_movePhotoFirst(ordered);
@@ -2456,17 +2565,29 @@ async function SS_openFromRows(rows,ctx){
   show($('slideshowOverlay'));
   SS_musicDucked=false;
   try{ sessionStorage.setItem('active_slideshow_open','1'); }catch(e){}
+  // 🎵 SLIDESHOW MUSIC FIX (regular AND private): if the shared <audio> element
+  // was paused externally (browser autoplay policy, tab sleep) after the user's
+  // "Open Memories"/"Open Private Memories" tap, force a fresh start of THIS
+  // area's playlist ('slideshow' or 'private') instead of leaving it silent.
+  noteAreaOpenWant(SS_musicCtxSafe());
   SS_ensureMusicPlaying();
   SS_startFloaters();
   SS_updateSlide();
 }
 $('openBtn').onclick=async()=>{
   if(!S.CURRENT_PERSON){alert('No person selected.');return}
+  // 🎵 The button tap is a user gesture — unlock the shared <audio> element
+  // synchronously right now so the slideshow song can actually start playing
+  // after the media rows finish loading (mobile browsers otherwise block the
+  // later programmatic play()).
+  primeAudioUnlock();
   const rows=await sb.rows(T_MEDIA,S.CURRENT_PERSON.id)||[];
   await SS_openFromRows(rows,'normal');
 };
 $('privateBtn').onclick=async()=>{
   if(!S.CURRENT_PERSON){alert('No person selected.');return}
+  // 🎵 Same gesture-unlock for the PRIVATE slideshow as for the regular one.
+  primeAudioUnlock();
   // 🔒 Private media is OTP-protected. The 6-digit OTP is generated ONLY in the Requester Portal
   // (derived from the Edit Key created when requester name + WhatsApp were added).
   const privOtp=getPrivateOtpForPerson(S.CURRENT_PERSON);
@@ -2495,6 +2616,10 @@ function privOtpTrySubmit(){
   const expected=getPrivateOtpForPerson(S.CURRENT_PERSON);
   if(!expected){hide($('privateOtpModal'));alert('🔒 No OTP exists for this card yet. It is generated in the Requester Portal.');return}
   if(val!==expected){privOtpFail();return}
+  // 🎵 The OTP Submit tap is the user gesture for the PRIVATE slideshow — unlock
+  // the shared <audio> element synchronously now so the private-area song can
+  // start after the media rows finish loading.
+  primeAudioUnlock();
   try{sessionStorage.setItem('priv_unlocked_'+(S.CURRENT_PERSON.slug||S.CURRENT_PERSON.id),'1')}catch(e){}
   hide($('privateOtpModal'));
   sb.rows(T_MEDIA,S.CURRENT_PERSON.id).then(rows=>SS_openFromRows(rows||[],'private')).catch(()=>alert('Could not load private memories.'));
