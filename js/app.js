@@ -1552,14 +1552,25 @@ $('voicePlayBtn').onclick=()=>{
 
 let VM_CURRENT=null;
 /* 🎬 VIDEO URL NORMALIZER (fix: "video message not appearing while playing"):
-   Guests usually paste Google Drive *share* links (".../file/d/<ID>/view") or
-   YouTube links into the Video URL field. A <video> element can never play
-   those — it fires an error and the old code silently closed the modal after
-   600 ms, so the video message "disappeared" on the card. Every shape is now
-   converted to something embeddable:
+   Guests usually paste Google Drive *share* links (".../file/d/<ID>/view"),
+   YouTube links, or Catbox/Litterbox links into the Video URL field. A
+   <video> element can never play the Drive/YouTube shapes — it fires an error
+   and the old code silently closed the modal after 600 ms, so the video
+   message "disappeared" on the card. Every shape is now converted to
+   something playable everywhere (guest card, admin preview, review editor):
      drive share/view/uc link   -> https://drive.google.com/file/d/<ID>/preview (iframe)
      youtube watch/youtu.be/shorts/embed -> https://www.youtube.com/embed/<ID> (iframe)
+     catbox.moe / litterbox.catbox.moe page links -> the raw file URL (plays inline in <video>)
+     vimeo player URLs          -> https://player.vimeo.com/video/<ID> (iframe)
      other direct http(s) links -> untouched (native <video>) */
+const CATBOX_HOST_RE=/(?:litterbox\.)?catbox\.moe/i;
+const VIDEO_EXT_RE=/\.(mp4|m4v|webm|ogg|ogv|mov|mkv|avi)(?:[?#].*)?$/i;
+// Extract the uploaded file name (e.g. "abc123.mp4") from any Catbox/Litterbox
+// URL shape: direct file URL, page link ("catbox.moe/#!/abc.mp4"), or hash form.
+function catboxFileName(s){
+  const m=String(s||'').match(/([A-Za-z0-9_-]+\.(?:mp4|m4v|webm|ogg|ogv|mov|mkv|avi))(?:[#?].*)?$/i);
+  return m?m[1]:'';
+}
 function normalizeVideoEmbed(u){
   const s=String(u||'').trim();
   if(!s)return '';
@@ -1567,16 +1578,42 @@ function normalizeVideoEmbed(u){
   if(m&&/drive\.google\.com|docs\.google\.com/.test(s))return 'https://drive.google.com/file/d/'+m[1]+'/preview';
   m=s.match(/(?:youtube\.com\/watch\?[^\s]*v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/);
   if(m)return 'https://www.youtube.com/embed/'+m[1];
+  // Catbox / Litterbox: rewrite every page-link shape to the canonical DIRECT
+  // file URL "https://files.cdn.spbl.catbox.moe/<name>" so a plain <video>
+  // element can play it everywhere (guest card, slideshow, admin preview).
+  // Litterbox temp files keep their own host (different CDN path per expiry).
+  if(CATBOX_HOST_RE.test(s)){
+    const fn=catboxFileName(s);
+    if(fn){
+      if(/litterbox\./i.test(s)){
+        // litterbox serves files under /temp/ or /internals/ — only rewrite
+        // bare page links; real resource URLs are already direct and untouched.
+        if(/^https?:\/\/(?:www\.)?litterbox\.catbox\.moe\/(?:#!\/?)?$/i.test(s.replace(/#.*$/,''))){
+          return 'https://litter.catbox.moe/'+fn;
+        }
+        return s;
+      }
+      // permanent catbox: anything not already on files.* becomes files.*
+      if(!/^https?:\/\/files\./i.test(s)&&!/^[a-z0-9._-]+\.mp4$/i.test(s)){
+        if(/^https?:\/\/(?:www\.)?catbox\.moe\//i.test(s))return 'https://files.cdn.spbl.catbox.moe/'+fn;
+      }
+      return s;
+    }
+  }
+  m=s.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if(m)return 'https://player.vimeo.com/video/'+m[1];
   return s;
 }
-function isIframeVideoUrl(u){ return /drive\.google\.com|docs\.google\.com|youtube\.com|youtu\.be/.test(String(u||'')); }
-$('videoMsgBtn').onclick=()=>{
-  if(!S.CURR.video||!S.CURR.video.length)return;
-  if(VM_CURRENT){ try{const v=VM_CURRENT.querySelector('video'); if(v){v.pause();v.currentTime=0;v.src='';}}catch(e){} VM_CURRENT.remove(); VM_CURRENT=null; }
+function isIframeVideoUrl(u){ return /drive\.google\.com|docs\.google\.com|youtube\.com|youtu\.be|player\.vimeo\.com/.test(String(u||'')); }
+/* Open the video-message player for ANY list of {title,video_url} rows.
+   Used by the guest card button, and reused by the admin/edit/review panels
+   via their "Test ▶" buttons so playback behaves identically everywhere. */
+function openVideoMessageModal(list){
+  const vids=(list||[]).filter(v=>v&&(v.video_url||v.url));
+  if(!vids.length)return false;
+  if(VM_CURRENT){ try{const v=VM_CURRENT.querySelector('video'); if(v){v.pause();v.currentTime=0;v.removeAttribute('src');v.load();}}catch(e){} VM_CURRENT.remove(); VM_CURRENT=null; }
   // FIX: show ALL submitted video messages (the guest panel allows many rows),
   // previously only videos[0] was ever reachable — the rest "didn't come" on the card.
-  const vids=(S.CURR.video||[]).filter(v=>v&&(v.video_url||v.url));
-  if(!vids.length)return;
   const mediaHtmlFor=(raw)=>{
     const e2=normalizeVideoEmbed(raw);
     return isIframeVideoUrl(e2)
@@ -1628,6 +1665,7 @@ $('videoMsgBtn').onclick=()=>{
   const closeVM=()=>{
     const vv=m.querySelector('video');
     if(vv){ try{ vv.pause(); vv.currentTime=0; vv.removeAttribute('src'); vv.load(); }catch(e){} }
+    const ifr=m.querySelector('iframe'); if(ifr)ifr.src='about:blank';
     m.remove();
     if(VM_CURRENT===m)VM_CURRENT=null;
   };
@@ -1635,7 +1673,9 @@ $('videoMsgBtn').onclick=()=>{
   m.querySelector('#vmClose').onclick=closeVM;
   m.addEventListener('click',(e)=>{ if(e.target===m)closeVM(); });
   bindVid(0);
-};
+  return true;
+}
+$('videoMsgBtn').onclick=()=>{ openVideoMessageModal(S.CURR.video); };
 
 let STORY_IDX=0;
 let STORY_T=null;
@@ -2721,7 +2761,10 @@ function SS_buildSlides(){
     d.dataset.i=i;
     if(s.type==='video'){
       const v=document.createElement('video');
-      v.src=s.src;
+      // FIX: normalize the URL so Catbox page links (and any other supported
+      // shape) resolve to a direct file URL that plays everywhere, including
+      // inside the memories slideshow.
+      v.src=normalizeVideoEmbed(s.src||'');
       v.playsInline=true;
       v.setAttribute('playsinline','');
       v.setAttribute('webkit-playsinline','');
@@ -3777,7 +3820,7 @@ function renderAdminEvents(){ const w=$('eventsRepeater');if(!w)return;w.innerHT
 $('addEventRow').onclick=()=>{S.CURR.events=S.CURR.events||[];S.CURR.events.push({icon:'📅',label:'',target_iso:'',target_iso_tz:DEFAULT_TZ});renderAdminEvents()};
 function renderAdminVoice(){ const w=$('voiceRepeater');if(!w)return;w.innerHTML=''; (S.CURR.voice||[]).forEach((v,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-vc="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Audio URL</label><input type="text" class="panel-input" data-vc="audio_url" data-i="${i}" value="${(v.audio_url||'')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{S.CURR.voice[+el.dataset.i][el.dataset.vc]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{S.CURR.voice.splice(+b.dataset.i,1);renderAdminVoice()}}); }
 $('addVoiceRow').onclick=()=>{S.CURR.voice=S.CURR.voice||[];S.CURR.voice.push({title:'',audio_url:''});renderAdminVoice()};
-function renderAdminVideo(){ const w=$('videoRepeater');if(!w)return;w.innerHTML=''; (S.CURR.video||[]).forEach((v,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-vd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL</label><input type="text" class="panel-input" data-vd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div>`; w.appendChild(row); }); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{S.CURR.video[+el.dataset.i][el.dataset.vd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{S.CURR.video.splice(+b.dataset.i,1);renderAdminVideo()}}); }
+function renderAdminVideo(){ const w=$('videoRepeater');if(!w)return;w.innerHTML=''; (S.CURR.video||[]).forEach((v,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-vd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL (Drive / YouTube / Catbox direct link — Catbox page links are auto-converted to the direct file URL)</label><input type="text" class="panel-input" data-vd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div><button type="button" class="panel-btn vm-test" data-i="${i}">▶ Test</button>`; w.appendChild(row); }); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{S.CURR.video[+el.dataset.i][el.dataset.vd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{S.CURR.video.splice(+b.dataset.i,1);renderAdminVideo()}}); w.querySelectorAll('.vm-test').forEach(b=>{b.onclick=()=>{if(!openVideoMessageModal(S.CURR.video))alert('Add at least one Video URL first.')}}); }
 $('addVideoRow').onclick=()=>{S.CURR.video=S.CURR.video||[];S.CURR.video.push({title:'',video_url:''});renderAdminVideo()};
 function renderAdminPins(){ const w=$('pinsRepeater');if(!w)return;w.innerHTML=''; (S.CURR.pins||[]).forEach((p,i)=>{ const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Label</label><input type="text" class="panel-input" data-pn="label" data-i="${i}" value="${(p.label||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Lat</label><input type="text" class="panel-input" data-pn="lat" data-i="${i}" value="${p.lat||''}"></div><div class="panel-field"><label class="panel-label">Lng</label><input type="text" class="panel-input" data-pn="lng" data-i="${i}" value="${p.lng||''}"></div><div class="panel-field"><label class="panel-label">Photo IDs (comma-separate for slideshow)</label><input type="text" class="panel-input" data-pn="photo_drive_id" data-i="${i}" value="${(p.photo_drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Story</label><textarea class="panel-textarea" data-pn="story" data-i="${i}">${(p.story||'')}</textarea></div>`; w.appendChild(row); }); w.querySelectorAll('input,textarea').forEach(el=>{el.oninput=()=>{S.CURR.pins[+el.dataset.i][el.dataset.pn]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{S.CURR.pins.splice(+b.dataset.i,1);renderAdminPins()}}); }
 $('addPinRow').onclick=()=>{S.CURR.pins=S.CURR.pins||[];S.CURR.pins.push({label:'',lat:'',lng:'',photo_drive_id:'',story:''});renderAdminPins()};
@@ -4127,7 +4170,7 @@ function renderGEEvents(){ const w=$('geEventsRepeater');if(!w)return;w.innerHTM
 $('geAddEventRow').onclick=()=>{GE.events.push({icon:'📅',label:'',target_iso:'',target_iso_tz:DEFAULT_TZ});renderGEEvents()};
 function renderGEVoice(){ const w=$('geVoiceRepeater');if(!w)return;w.innerHTML=''; GE.voice.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gv="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Audio URL</label><input type="text" class="panel-input" data-gv="audio_url" data-i="${i}" value="${(v.audio_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{GE.voice[+el.dataset.i][el.dataset.gv]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.voice.splice(+b.dataset.i,1);renderGEVoice()}}); }
 $('geAddVoiceRow').onclick=()=>{GE.voice.push({title:'',audio_url:''});renderGEVoice()};
-function renderGEVideo(){ const w=$('geVideoRepeater');if(!w)return;w.innerHTML=''; GE.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL</label><input type="text" class="panel-input" data-gd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{GE.video[+el.dataset.i][el.dataset.gd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.video.splice(+b.dataset.i,1);renderGEVideo()}}); }
+function renderGEVideo(){ const w=$('geVideoRepeater');if(!w)return;w.innerHTML=''; GE.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL (Drive / YouTube / Catbox direct link — Catbox page links are auto-converted to the direct file URL)</label><input type="text" class="panel-input" data-gd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div><button type="button" class="panel-btn vm-test" data-i="${i}">▶ Test</button>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{GE.video[+el.dataset.i][el.dataset.gd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.video.splice(+b.dataset.i,1);renderGEVideo()}}); w.querySelectorAll('.vm-test').forEach(b=>{b.onclick=()=>{if(!openVideoMessageModal(GE.video))alert('Add at least one Video URL first.')}}); }
 $('geAddVideoRow').onclick=()=>{GE.video.push({title:'',video_url:''});renderGEVideo()};
 function renderGEPins(){ const w=$('gePinsRepeater');if(!w)return;w.innerHTML=''; GE.pins.forEach((p,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Label</label><input type="text" class="panel-input" data-gp="label" data-i="${i}" value="${(p.label||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Lat</label><input type="text" class="panel-input" data-gp="lat" data-i="${i}" value="${p.lat||''}"></div><div class="panel-field"><label class="panel-label">Lng</label><input type="text" class="panel-input" data-gp="lng" data-i="${i}" value="${p.lng||''}"></div><div class="panel-field"><label class="panel-label">Photo IDs (comma-separate for slideshow)</label><input type="text" class="panel-input" data-gp="photo_drive_id" data-i="${i}" value="${(p.photo_drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Story</label><textarea class="panel-textarea" data-gp="story" data-i="${i}">${(p.story||'')}</textarea></div>`; w.appendChild(row)}); w.querySelectorAll('input,textarea').forEach(el=>{el.oninput=()=>{GE.pins[+el.dataset.i][el.dataset.gp]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{GE.pins.splice(+b.dataset.i,1);renderGEPins()}}); }
 $('geAddPinRow').onclick=()=>{GE.pins.push({label:'',lat:'',lng:'',photo_drive_id:'',story:''});renderGEPins()};
@@ -5204,7 +5247,7 @@ function renderGuestEvents(){ const w=$('guestEventsRepeater');if(!w)return;w.in
 $('guestAddEventRow').onclick=()=>{G.events.push({icon:'📅',label:'',target_iso:'',target_iso_tz:DEFAULT_TZ});renderGuestEvents()};
 function renderGuestVoice(){ const w=$('guestVoiceRepeater');if(!w)return;w.innerHTML=''; G.voice.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gv="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Audio URL</label><input type="text" class="panel-input" data-gv="audio_url" data-i="${i}" value="${(v.audio_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{G.voice[+el.dataset.i][el.dataset.gv]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.voice.splice(+b.dataset.i,1);renderGuestVoice()}}); }
 $('guestAddVoiceRow').onclick=()=>{G.voice.push({title:'',audio_url:''});renderGuestVoice()};
-function renderGuestVideo(){ const w=$('guestVideoRepeater');if(!w)return;w.innerHTML=''; G.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL</label><input type="text" class="panel-input" data-gd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{G.video[+el.dataset.i][el.dataset.gd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.video.splice(+b.dataset.i,1);renderGuestVideo()}}); }
+function renderGuestVideo(){ const w=$('guestVideoRepeater');if(!w)return;w.innerHTML=''; G.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-gd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL (Drive / YouTube / Catbox direct link — Catbox page links are auto-converted to the direct file URL)</label><input type="text" class="panel-input" data-gd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div><button type="button" class="panel-btn vm-test" data-i="${i}">▶ Test</button>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{G.video[+el.dataset.i][el.dataset.gd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.video.splice(+b.dataset.i,1);renderGuestVideo()}}); w.querySelectorAll('.vm-test').forEach(b=>{b.onclick=()=>{if(!openVideoMessageModal(G.video))alert('Add at least one Video URL first.')}}); }
 $('guestAddVideoRow').onclick=()=>{G.video.push({title:'',video_url:''});renderGuestVideo()};
 function renderGuestPins(){ const w=$('guestPinsRepeater');if(!w)return;w.innerHTML=''; G.pins.forEach((p,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Label</label><input type="text" class="panel-input" data-gp="label" data-i="${i}" value="${(p.label||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Lat</label><input type="text" class="panel-input" data-gp="lat" data-i="${i}" value="${p.lat||''}"></div><div class="panel-field"><label class="panel-label">Lng</label><input type="text" class="panel-input" data-gp="lng" data-i="${i}" value="${p.lng||''}"></div><div class="panel-field"><label class="panel-label">Photo IDs (comma-separate for slideshow)</label><input type="text" class="panel-input" data-gp="photo_drive_id" data-i="${i}" value="${(p.photo_drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Story</label><textarea class="panel-textarea" data-gp="story" data-i="${i}">${(p.story||'')}</textarea></div>`; w.appendChild(row)}); w.querySelectorAll('input,textarea').forEach(el=>{el.oninput=()=>{G.pins[+el.dataset.i][el.dataset.gp]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{G.pins.splice(+b.dataset.i,1);renderGuestPins()}}); }
 $('guestAddPinRow').onclick=()=>{G.pins.push({label:'',lat:'',lng:'',photo_drive_id:'',story:''});renderGuestPins()};
@@ -5424,7 +5467,7 @@ function renderREEvents(){ const w=$('reEventsRepeater');if(!w)return;w.innerHTM
 $('reAddEventRow').onclick=()=>{RE.events.push({icon:'📅',label:'',target_iso:'',target_iso_tz:DEFAULT_TZ});renderREEvents()};
 function renderREVoice(){ const w=$('reVoiceRepeater');if(!w)return;w.innerHTML=''; RE.voice.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rv="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Audio URL</label><input type="text" class="panel-input" data-rv="audio_url" data-i="${i}" value="${(v.audio_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{RE.voice[+el.dataset.i][el.dataset.rv]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.voice.splice(+b.dataset.i,1);renderREVoice()}}); }
 $('reAddVoiceRow').onclick=()=>{RE.voice.push({title:'',audio_url:''});renderREVoice()};
-function renderREVideo(){ const w=$('reVideoRepeater');if(!w)return;w.innerHTML=''; RE.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL</label><input type="text" class="panel-input" data-rd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{RE.video[+el.dataset.i][el.dataset.rd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.video.splice(+b.dataset.i,1);renderREVideo()}}); }
+function renderREVideo(){ const w=$('reVideoRepeater');if(!w)return;w.innerHTML=''; RE.video.forEach((v,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Title</label><input type="text" class="panel-input" data-rd="title" data-i="${i}" value="${(v.title||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Video URL (Drive / YouTube / Catbox direct link — Catbox page links are auto-converted to the direct file URL)</label><input type="text" class="panel-input" data-rd="video_url" data-i="${i}" value="${(v.video_url||'')}"></div><button type="button" class="panel-btn vm-test" data-i="${i}">▶ Test</button>`; w.appendChild(row)}); w.querySelectorAll('input').forEach(el=>{el.oninput=()=>{RE.video[+el.dataset.i][el.dataset.rd]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.video.splice(+b.dataset.i,1);renderREVideo()}}); w.querySelectorAll('.vm-test').forEach(b=>{b.onclick=()=>{if(!openVideoMessageModal(RE.video))alert('Add at least one Video URL first.')}}); }
 $('reAddVideoRow').onclick=()=>{RE.video.push({title:'',video_url:''});renderREVideo()};
 function renderREPins(){ const w=$('rePinsRepeater');if(!w)return;w.innerHTML=''; RE.pins.forEach((p,i)=>{const row=document.createElement('div');row.className='repeat-row'; row.innerHTML=`<button type="button" class="repeat-remove" data-i="${i}">✕</button><div class="panel-field"><label class="panel-label">Label</label><input type="text" class="panel-input" data-rp="label" data-i="${i}" value="${(p.label||'').replace(/"/g,'&quot;')}"></div><div class="panel-field"><label class="panel-label">Lat</label><input type="text" class="panel-input" data-rp="lat" data-i="${i}" value="${p.lat||''}"></div><div class="panel-field"><label class="panel-label">Lng</label><input type="text" class="panel-input" data-rp="lng" data-i="${i}" value="${p.lng||''}"></div><div class="panel-field"><label class="panel-label">Photo IDs (comma-separate for slideshow)</label><input type="text" class="panel-input" data-rp="photo_drive_id" data-i="${i}" value="${(p.photo_drive_id||'')}"></div><div class="panel-field"><label class="panel-label">Story</label><textarea class="panel-textarea" data-rp="story" data-i="${i}">${(p.story||'')}</textarea></div>`; w.appendChild(row)}); w.querySelectorAll('input,textarea').forEach(el=>{el.oninput=()=>{RE.pins[+el.dataset.i][el.dataset.rp]=el.value}}); w.querySelectorAll('.repeat-remove').forEach(b=>{b.onclick=()=>{RE.pins.splice(+b.dataset.i,1);renderREPins()}}); }
 $('reAddPinRow').onclick=()=>{RE.pins.push({label:'',lat:'',lng:'',photo_drive_id:'',story:''});renderREPins()};

@@ -6,6 +6,7 @@ let SETTINGS = [
   { key: 'shared__adminPassword', value: 'Deepnectar@@1617@@', person_id: null },
   { key: 'shared__admin_slug', value: 'cake', person_id: null },
   { key: 'shared__enableStory', value: 'true', person_id: 1 },
+  { key: 'shared__enableVideoMsg', value: 'true', person_id: 1 },
   { key: 'shared__enableMap', value: 'true', person_id: 1 },
   { key: 'shared__enableUpload', value: 'true', person_id: 1 },
   { key: 'shared__storySlideshowEnabled', value: 'true', person_id: 1 },
@@ -23,7 +24,10 @@ const EVENTS = [
   { id: 31, person_id: 1, icon: '💖', label: 'Anniversary', target_iso: new Date(Date.now() + 86400000 * 5).toISOString() },
 ];
 const VOICE = [{ id: 41, person_id: 1, title: 'Voice', audio_url: 'https://drive.google.com/file/d/VOICEID1/view' }];
-const VIDEO = [{ id: 51, person_id: 1, title: 'Video', video_url: 'https://example.com/v.mp4' }];
+const VIDEO = [
+  { id: 51, person_id: 1, title: 'Catbox Direct', video_url: 'https://files.cdn.spbl.catbox.moe/abc123.mp4' },
+  { id: 52, person_id: 1, title: 'Catbox Page Link', video_url: 'https://catbox.moe/#!/def456.webm' },
+];
 const PINS = [
   { id: 61, person_id: 1, label: 'Paris', lat: '48.85', lng: '2.35', photo_drive_id: 'PINID1,PINID2', story: 'Our trip to Paris!' },
   { id: 62, person_id: 1, label: 'Goa', lat: '15.49', lng: '73.82', photo_drive_id: 'PINID3', story: 'Beach days.' },

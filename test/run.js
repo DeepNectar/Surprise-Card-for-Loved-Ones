@@ -163,6 +163,49 @@ function check(name, ok, extra) {
   const voiceVisible = await page.evaluate(() => getComputedStyle(document.getElementById('voiceRow')).display !== 'none');
   check('voice row visible', voiceVisible);
 
+  // ---- VIDEO MESSAGE (card playback, incl. Catbox links) ----
+  const videoRowVisible = await page.evaluate(() => getComputedStyle(document.getElementById('videoMsgRow')).display !== 'none');
+  check('video message row visible on card', videoRowVisible);
+  if (videoRowVisible) {
+    await page.click('#videoMsgBtn');
+    await page.waitForTimeout(500);
+    const vm1 = await page.evaluate(() => {
+      const m = document.querySelector('.info-modal.active .vm-modal-content');
+      const v = m && m.querySelector('video.vm-video');
+      return { modal: !!m, tag: v ? 'video' : (m && m.querySelector('iframe') ? 'iframe' : ''), src: v ? v.getAttribute('src') : '' };
+    });
+    check('video modal opens with native <video> for direct catbox URL', vm1.modal && vm1.tag === 'video' && /files\.cdn\.spbl\.catbox\.moe\/abc123\.mp4/.test(vm1.src || ''), JSON.stringify(vm1));
+    const picks = await page.$$('.vm-pick');
+    check('all submitted videos reachable via picker', picks.length === 2, 'n=' + picks.length);
+    if (picks.length === 2) {
+      await picks[1].click();
+      await page.waitForTimeout(400);
+      const vm2 = await page.evaluate(() => {
+        const v = document.querySelector('.info-modal.active video.vm-video');
+        return { src: v ? v.getAttribute('src') : '', title: (document.querySelector('.info-modal.active .info-title') || {}).textContent || '' };
+      });
+      check('catbox PAGE link auto-converts to direct file URL and plays', /files\.cdn\.spbl\.catbox\.moe\/def456\.webm/.test(vm2.src || '') && vm2.title === 'Catbox Page Link', JSON.stringify(vm2));
+      await page.click('#vmClose');
+      await page.waitForTimeout(300);
+      const vmClosed = await page.evaluate(() => !document.querySelector('.info-modal.active .vm-modal-content'));
+      check('video modal closes cleanly', vmClosed);
+    }
+  }
+
+  // ---- normalizeVideoEmbed unit checks (in-page) ----
+  const normOk = await page.evaluate(() => {
+    const t = [
+      ['https://catbox.moe/#!/abc.mp4', 'https://files.cdn.spbl.catbox.moe/abc.mp4'],
+      ['https://files.cdn.spbl.catbox.moe/abc.webm', 'https://files.cdn.spbl.catbox.moe/abc.webm'],
+      ['https://litterbox.catbox.moe/resources/internals/x.mp4', 'https://litterbox.catbox.moe/resources/internals/x.mp4'],
+      ['https://youtu.be/dQw4w9WgXcQ', 'https://www.youtube.com/embed/dQw4w9WgXcQ'],
+      ['https://drive.google.com/file/d/1AbC/view?usp=sharing', 'https://drive.google.com/file/d/1AbC/preview'],
+      ['https://vimeo.com/123456789', 'https://player.vimeo.com/video/123456789']
+    ];
+    return t.every(c => normalizeVideoEmbed(c[0]) === c[1]);
+  });
+  check('normalizeVideoEmbed handles catbox/youtube/drive/vimeo shapes', normOk);
+
   // ---- BACK BUTTON returns home ----
   await page.evaluate(() => document.getElementById('viewerBackBtn').click());
   await page.waitForTimeout(600);
